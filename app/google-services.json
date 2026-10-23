@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "123456789",
+    "project_id": "smart-med-guardian-placeholder",
+    "storage_bucket": "smart-med-guardian-placeholder.appspot.com"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:123456789:android:123456789",
+        "android_client_info": {
+          "package_name": "com.smartmedguardian"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCT5LblXACOzC0HjnVXXuC3SrPLdplSnPc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

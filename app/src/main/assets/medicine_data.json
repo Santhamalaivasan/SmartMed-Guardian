@@ -1,0 +1,77 @@
+{
+  "medicines": [
+    {
+      "medicineName": "Paracetamol",
+      "genericName": "Acetaminophen",
+      "brandName": "Panadol, Tylenol",
+      "category": "Analgesic, Antipyretic",
+      "strength": "500mg",
+      "dosageForm": "Tablet",
+      "manufacturer": "Various",
+      "uses": "Relief of mild to moderate pain and fever.",
+      "commonSideEffects": "Rarely, nausea or allergic reactions.",
+      "seriousSideEffects": "Liver damage (if taken in high doses), severe skin reactions.",
+      "storageInstructions": "Store at room temperature away from moisture and heat.",
+      "beforeAfterFood": "Can be taken with or without food.",
+      "pregnancyWarning": "Generally safe, but consult a doctor.",
+      "childrenWarning": "Use child-specific dosage and formulations.",
+      "elderlyWarning": "Generally safe.",
+      "maxDailyDose": "4000mg (8 tablets of 500mg) per 24 hours.",
+      "barcode": "1234567890123"
+    },
+    {
+      "medicineName": "Vitamin C",
+      "genericName": "Ascorbic Acid",
+      "brandName": "Celine, Redoxon",
+      "category": "Vitamin Supplement",
+      "strength": "500mg",
+      "dosageForm": "Tablet/Chewable",
+      "manufacturer": "Various",
+      "uses": "Prevention and treatment of scurvy, immune support.",
+      "commonSideEffects": "Diarrhea, stomach cramps at high doses.",
+      "seriousSideEffects": "Kidney stones (rare at normal doses).",
+      "storageInstructions": "Keep tightly closed in a cool, dry place.",
+      "beforeAfterFood": "Preferably after meals.",
+      "pregnancyWarning": "Safe at recommended doses.",
+      "childrenWarning": "Safe at recommended doses.",
+      "elderlyWarning": "Safe at recommended doses.",
+      "maxDailyDose": "2000mg for adults.",
+      "barcode": "2345678901234"
+    },
+    {
+      "medicineName": "Aspirin",
+      "genericName": "Acetylsalicylic Acid",
+      "brandName": "Bayer, Aspro",
+      "category": "NSAID, Antiplatelet",
+      "strength": "300mg",
+      "dosageForm": "Tablet",
+      "manufacturer": "Various",
+      "uses": "Pain relief, inflammation, and heart attack prevention.",
+      "commonSideEffects": "Stomach irritation, easy bruising.",
+      "seriousSideEffects": "Gastrointestinal bleeding, Reye's syndrome in children.",
+      "storageInstructions": "Store in a cool, dry place.",
+      "beforeAfterFood": "Take with food or milk to avoid stomach upset.",
+      "pregnancyWarning": "Avoid in late pregnancy.",
+      "childrenWarning": "Contraindicated in children under 16 due to Reye's syndrome.",
+      "elderlyWarning": "Higher risk of gastrointestinal bleeding.",
+      "maxDailyDose": "4000mg per 24 hours.",
+      "barcode": "3456789012345"
+    }
+  ],
+  "interactions": [
+    {
+      "medicineA": "Aspirin",
+      "medicineB": "Warfarin",
+      "severity": "High",
+      "reason": "Increased risk of severe bleeding.",
+      "recommendation": "Avoid combination or monitor closely under medical supervision."
+    },
+    {
+      "medicineA": "Paracetamol",
+      "medicineB": "Alcohol",
+      "severity": "Moderate",
+      "reason": "Increased risk of liver toxicity.",
+      "recommendation": "Limit alcohol consumption while taking Paracetamol."
+    }
+  ]
+}

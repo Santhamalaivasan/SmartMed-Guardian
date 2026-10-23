@@ -1,0 +1,14 @@
+{
+  "name": "smartmed-guardian-functions",
+  "version": "1.0.0",
+  "description": "Firebase Cloud Functions for SmartMed Guardian Caregiver Notifications",
+  "main": "index.js",
+  "dependencies": {
+    "firebase-admin": "^11.8.0",
+    "firebase-functions": "^4.3.1"
+  },
+  "engines": {
+    "node": "18"
+  },
+  "private": true
+}

@@ -1,0 +1,40 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper function to check if user is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Helper function to check if user is accessing their own data
+    function isOwner(userId) {
+      return request.auth.uid == userId;
+    }
+
+    match /users/{userId} {
+      // Users can read/write their own profile
+      allow read, write: if isAuthenticated() && isOwner(userId);
+
+      // Sub-collections: prescriptions, history, adherence, allergies, caregiver
+      match /prescriptions/{docId} {
+        allow read, write: if isAuthenticated() && isOwner(userId);
+      }
+      match /history/{docId} {
+        allow read, write: if isAuthenticated() && isOwner(userId);
+      }
+      match /adherence/{docId} {
+        allow read, write: if isAuthenticated() && isOwner(userId);
+      }
+      match /allergies/{docId} {
+        allow read, write: if isAuthenticated() && isOwner(userId);
+      }
+      match /caregiver/{docId} {
+        allow read, write: if isAuthenticated() && isOwner(userId);
+
+        // Allow caregivers to read patient data if linked
+        // This is a simplified rule; in production, you'd check a 'linked_caregiver' field
+        // or a separate 'relationships' collection.
+      }
+    }
+  }
+}
