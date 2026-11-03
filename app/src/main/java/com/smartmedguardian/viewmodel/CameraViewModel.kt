@@ -151,10 +151,8 @@ class CameraViewModel @Inject constructor(
 
                     val displayResult = if (verification.status == VerificationStatus.UNABLE_TO_VERIFY || verification.status == VerificationStatus.UNKNOWN_MEDICINE) {
                         cnnResult.copy(name = "Unable to Verify Medicine")
-                    } else if (cnnResult.name.equals("Dolo650", ignoreCase = true) || cnnResult.name.equals("Dolo-650", ignoreCase = true)) {
-                        cnnResult.copy(name = "Dolo-650")
                     } else {
-                        cnnResult
+                        cnnResult.copy(name = com.smartmedguardian.util.MedicineNameCanonicalizer.canonicalize(cnnResult.name))
                     }
 
                     val totalElapsed = System.currentTimeMillis() - analysisStart
@@ -185,6 +183,9 @@ class CameraViewModel @Inject constructor(
             }
             VerificationStatus.ALREADY_VERIFIED -> {
                 voiceHelper.speak("This dose has already been verified today. Dose was not marked as taken again.")
+            }
+            VerificationStatus.DUPLICATE_INGREDIENT -> {
+                voiceHelper.speak("Warning. Another medication with the same active ingredient was recently recorded.")
             }
             VerificationStatus.UNSCHEDULED_TIME -> {
                 voiceHelper.speak("Warning. This medicine is in your prescription, but is not scheduled for this time slot. Dose was not marked as taken.")

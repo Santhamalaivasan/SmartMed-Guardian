@@ -16,11 +16,23 @@ interface AdherenceDao {
     @Query("SELECT * FROM adherence_records WHERE medicineName = :name AND scheduledTime BETWEEN :startTime AND :endTime")
     suspend fun getAdherenceForMedicineInWindow(name: String, startTime: Long, endTime: Long): List<AdherenceRecord>
 
+    @Query("SELECT * FROM adherence_records WHERE medicineName IN (:names) AND scheduledTime BETWEEN :startTime AND :endTime")
+    suspend fun getAdherenceForCanonicalNamesInWindow(names: List<String>, startTime: Long, endTime: Long): List<AdherenceRecord>
+
+    @Query("SELECT * FROM adherence_records WHERE scheduledDoseId = :doseId LIMIT 1")
+    suspend fun getRecordByDoseId(doseId: String): AdherenceRecord?
+
+    @Update
+    suspend fun updateAdherenceRecord(record: AdherenceRecord)
+
     @Query("SELECT * FROM adherence_records ORDER BY scheduledTime DESC")
     fun getAllAdherenceRecords(): Flow<List<AdherenceRecord>>
 
     @Query("SELECT * FROM adherence_records WHERE scheduledTime >= :startTime")
     fun getAdherenceSince(startTime: Long): Flow<List<AdherenceRecord>>
+
+    @Query("DELETE FROM adherence_records")
+    suspend fun deleteAllAdherenceRecords()
 
     // Caregiver Info
     @Insert(onConflict = OnConflictStrategy.REPLACE)

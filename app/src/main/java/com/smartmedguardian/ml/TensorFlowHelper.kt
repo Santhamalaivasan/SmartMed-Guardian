@@ -166,7 +166,7 @@ class TensorFlowHelper(private val context: Context) {
             "Unknown Class $maxIdx"
         }
 
-        Log.d("TensorFlowHelper", "Classification predicted $medicineName ($maxConf) in ${inferenceTime}ms")
+        Log.d("TensorFlowHelper", "Classification predicted [REDACTED_MEDICINE] ($maxConf) in ${inferenceTime}ms")
 
         return RecognitionResult(
             name = medicineName,

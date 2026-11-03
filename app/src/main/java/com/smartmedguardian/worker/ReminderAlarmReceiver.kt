@@ -18,7 +18,7 @@ import java.util.Calendar
 class ReminderAlarmReceiver : BroadcastReceiver() {
 
     companion object {
-        const val CHANNEL_ID = "medication_reminders_channel"
+        const val CHANNEL_ID = com.smartmedguardian.util.NotificationConstants.MEDICATION_REMINDERS_CHANNEL_ID
         const val ACTION_VERIFY = "com.smartmedguardian.ACTION_VERIFY_MEDICINE"
     }
 
@@ -31,7 +31,7 @@ class ReminderAlarmReceiver : BroadcastReceiver() {
         val timeStr = intent.getStringExtra("timeStr") ?: ""
         val isSnooze = intent.getBooleanExtra("isSnooze", false)
 
-        Log.d("ReminderAlarmReceiver", "Received alarm action=$action for $medicineName ($slotName)")
+        Log.d("ReminderAlarmReceiver", "Received alarm action=$action for prescription $prescriptionId ($slotName)")
 
         if (action == ReminderScheduler.ACTION_SNOOZE_REMINDER) {
             // Cancel current notification
@@ -140,6 +140,11 @@ class ReminderAlarmReceiver : BroadcastReceiver() {
             .addAction(0, "Remind Me Later", snoozePendingIntent)
             .build()
 
+        if (!notificationManager.areNotificationsEnabled()) {
+            Log.w("ReminderAlarmReceiver", "Notification permission disabled. Notification skipped.")
+            return
+        }
+
         val notificationId = if (prescriptionId > 0) (prescriptionId * 10 + slotName.hashCode()).toInt() else medicineName.hashCode()
         notificationManager.notify(notificationId, notification)
     }
@@ -164,8 +169,11 @@ class ReminderAlarmReceiver : BroadcastReceiver() {
             set(Calendar.MILLISECOND, 0)
         }
 
+        val dataStr = ReminderScheduler.getReminderDataString(prescriptionId, slotName, isSnooze = false)
+
         val intent = Intent(context, ReminderAlarmReceiver::class.java).apply {
             action = ReminderScheduler.ACTION_MEDICATION_REMINDER
+            data = android.net.Uri.parse(dataStr)
             putExtra("prescriptionId", prescriptionId)
             putExtra("medicineName", medicineName)
             putExtra("dosage", dosage)
@@ -183,14 +191,28 @@ class ReminderAlarmReceiver : BroadcastReceiver() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        val showIntent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val showPendingIntent = PendingIntent.getActivity(
+            context,
+            requestCode + 20000000,
+            showIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val alarmClockInfo = AlarmManager.AlarmClockInfo(tomorrow.timeInMillis, showPendingIntent)
+
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !alarmManager.canScheduleExactAlarms()) {
-                alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, tomorrow.timeInMillis, pendingIntent)
-            } else {
-                alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, tomorrow.timeInMillis, pendingIntent)
-            }
+            alarmManager.setAlarmClock(alarmClockInfo, pendingIntent)
+            Log.d("ReminderAlarmReceiver", "Next day alarm clock scheduled for prescription $prescriptionId ($slotName) at ${tomorrow.time}")
         } catch (e: Exception) {
-            Log.e("ReminderAlarmReceiver", "Error re-scheduling next day alarm", e)
+            Log.e("ReminderAlarmReceiver", "Error re-scheduling next day alarm clock, falling back", e)
+            try {
+                alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, tomorrow.timeInMillis, pendingIntent)
+            } catch (e2: Exception) {
+                alarmManager.set(AlarmManager.RTC_WAKEUP, tomorrow.timeInMillis, pendingIntent)
+            }
         }
     }
 }

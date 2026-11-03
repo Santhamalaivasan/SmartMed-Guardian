@@ -12,7 +12,7 @@ interface SafetyDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertMedicineInfo(info: List<MedicineInfo>)
 
-    @Query("SELECT * FROM medicine_info WHERE medicineName = :name LIMIT 1")
+    @Query("SELECT * FROM medicine_info WHERE medicineName = :name OR (medicineName = 'Dolo-650' AND (:name = 'Dolo650' OR :name = 'Dolo-650')) OR brandName LIKE '%' || :name || '%' LIMIT 1")
     suspend fun getMedicineInfoByName(name: String): MedicineInfo?
 
     @Query("SELECT * FROM medicine_info WHERE barcode = :barcode LIMIT 1")
@@ -40,4 +40,7 @@ interface SafetyDao {
 
     @Delete
     suspend fun deleteAllergy(allergy: UserAllergy)
+
+    @Query("DELETE FROM user_allergies")
+    suspend fun deleteAllAllergies()
 }

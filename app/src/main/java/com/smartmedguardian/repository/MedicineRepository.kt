@@ -1,9 +1,11 @@
 package com.smartmedguardian.repository
 
 import android.content.Context
+import android.app.NotificationManager
 import android.graphics.Bitmap
 import android.net.Uri
 import android.util.Log
+import androidx.work.WorkManager
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ktx.snapshots
@@ -11,6 +13,7 @@ import com.google.firebase.firestore.ktx.toObject
 import com.google.firebase.firestore.ktx.toObjects
 import com.smartmedguardian.data.dao.AdherenceDao
 import com.smartmedguardian.data.dao.CaregiverAlertDao
+import com.smartmedguardian.data.dao.MedicineConditionDao
 import com.smartmedguardian.data.dao.MedicineHistoryDao
 import com.smartmedguardian.data.dao.MedicineReferenceImageDao
 import com.smartmedguardian.data.dao.PrescriptionDao
@@ -71,6 +74,7 @@ interface MedicineRepository {
     fun getAllHistory(): Flow<List<MedicineHistory>>
     suspend fun insertHistory(history: MedicineHistory)
     suspend fun clearHistory()
+    suspend fun clearLocalUserData()
     
     // Verification logic
     suspend fun verifyRecognition(
@@ -99,6 +103,15 @@ interface MedicineRepository {
     suspend fun insertAdherenceRecord(record: AdherenceRecord)
     fun getAdherenceSince(startTime: Long): Flow<List<AdherenceRecord>>
     suspend fun getAdherenceForMedicineInWindow(name: String, startTime: Long, endTime: Long): List<AdherenceRecord>
+    suspend fun getAdherenceForCanonicalNamesInWindow(names: List<String>, startTime: Long, endTime: Long): List<AdherenceRecord>
+    suspend fun getRecordByDoseId(doseId: String): AdherenceRecord?
+    suspend fun markDoseMissed(
+        scheduledDoseId: String,
+        medicineName: String,
+        scheduledTime: Long,
+        dosage: String,
+        slotName: String
+    ): AdherenceRecord
     
     // Caregiver methods
     fun getCaregiver(): Flow<CaregiverInfo?>
@@ -124,6 +137,11 @@ interface MedicineRepository {
     fun getRemoteRisk(patientId: String): Flow<RiskAssessment?>
     suspend fun uploadRisk(risk: RiskAssessment)
 
+    // Condition Trend Analysis methods
+    suspend fun getMedicinesForCondition(conditionName: String): List<String>
+    suspend fun getConditionPrescriptions(conditionName: String): List<Prescription>
+    suspend fun getConditionAdherenceRecords(conditionName: String, startTime: Long, endTime: Long): List<AdherenceRecord>
+
     // Cloud Sync
     suspend fun syncLocalToCloud()
 }
@@ -139,6 +157,7 @@ class MedicineRepositoryImpl @Inject constructor(
     private val safetyDao: SafetyDao,
     private val adherenceDao: AdherenceDao,
     private val caregiverAlertDao: CaregiverAlertDao,
+    private val medicineConditionDao: MedicineConditionDao,
     private val verificationManager: MedicineVerificationManager,
     private val securityHelper: SecurityHelper,
     private val smsHelper: CaregiverSmsHelper,
@@ -350,6 +369,59 @@ class MedicineRepositoryImpl @Inject constructor(
         historyDao.clearHistory()
     }
 
+    override suspend fun clearLocalUserData(): Unit = withContext(Dispatchers.IO) {
+        // 1. Cancel scheduled alarms for active prescriptions
+        try {
+            val prescriptions = prescriptionDao.getAllPrescriptions().first()
+            val reminderScheduler = com.smartmedguardian.worker.ReminderScheduler(context)
+            for (p in prescriptions) {
+                reminderScheduler.cancelAllReminders(p.id)
+            }
+        } catch (e: Exception) {
+            Log.e("MedicineRepository", "Error cancelling reminders during clearLocalUserData", e)
+        }
+
+        // 2. Cancel WorkManager jobs
+        try {
+            WorkManager.getInstance(context).cancelAllWork()
+        } catch (e: Exception) {
+            Log.e("MedicineRepository", "Error cancelling WorkManager jobs during clearLocalUserData", e)
+        }
+
+        // 3. Clear active notifications
+        try {
+            val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            notificationManager.cancelAll()
+        } catch (e: Exception) {
+            Log.e("MedicineRepository", "Error clearing system notifications during clearLocalUserData", e)
+        }
+
+        // 4. Clear all user-specific Room tables
+        historyDao.clearHistory()
+        prescriptionDao.deleteAllPrescriptions()
+        medicineReferenceImageDao.deleteAllReferenceImages()
+        safetyDao.deleteAllAllergies()
+        adherenceDao.deleteAllAdherenceRecords()
+        adherenceDao.deleteCaregiver()
+        caregiverAlertDao.deleteAllCaregiverAlerts()
+
+        // 5. Delete disk reference image directory
+        val refImagesDir = File(context.filesDir, "medicine_references")
+        if (refImagesDir.exists()) {
+            val deleted = refImagesDir.deleteRecursively()
+            if (!deleted) {
+                Log.w("MedicineRepository", "Failed to delete reference images directory")
+            }
+        }
+
+        // 6. Clear cache directory
+        try {
+            context.cacheDir.deleteRecursively()
+        } catch (e: Exception) {
+            Log.e("MedicineRepository", "Error clearing cache directory", e)
+        }
+    }
+
     override suspend fun verifyRecognition(
         recognitionResult: RecognitionResult,
         ocrText: String?,
@@ -454,10 +526,10 @@ class MedicineRepositoryImpl @Inject constructor(
             if (diffMins > 720) diffMins = 1440 - diffMins
 
             Log.d("PrescriptionDebug", "Prescription ID = ${candidatePrescription.id}")
-            Log.d("PrescriptionDebug", "Prescription medicine = ${candidatePrescription.medicineName}")
-            Log.d("PrescriptionDebug", "Detected medicine = $detectedMedName")
-            Log.d("PrescriptionDebug", "Normalized prescription = $normPrescription")
-            Log.d("PrescriptionDebug", "Normalized detected = $normDetected")
+            Log.d("PrescriptionDebug", "Prescription medicine = [REDACTED_MEDICINE]")
+            Log.d("PrescriptionDebug", "Detected medicine = [REDACTED_MEDICINE]")
+            Log.d("PrescriptionDebug", "Normalized prescription = [REDACTED_MEDICINE]")
+            Log.d("PrescriptionDebug", "Normalized detected = [REDACTED_MEDICINE]")
             Log.d("PrescriptionDebug", "Scheduled time = $scheduledTimeDisplay")
             Log.d("PrescriptionDebug", "Actual time = $currentTime")
             Log.d("PrescriptionDebug", "Time difference = $diffMins mins")
@@ -501,9 +573,65 @@ class MedicineRepositoryImpl @Inject constructor(
             prescriptionId = prescriptionId
         )
 
-        // Persist records based on verification outcome
-        if (verification.status == VerificationStatus.CORRECT_MEDICINE && verification.prescription != null) {
+        // Post-verification atomic duplicate and active ingredient evaluation
+        val finalVerification = if (verification.status == VerificationStatus.CORRECT_MEDICINE && verification.prescription != null) {
             val verifiedPrescription = verification.prescription
+            val (wStart, wEnd) = verificationManager.getSlotTimeWindowMillis(activeSlot, currentTime, currentDate)
+            
+            val canonicalTarget = com.smartmedguardian.util.MedicineNameCanonicalizer.canonicalize(verifiedPrescription.medicineName)
+            val namesToCheck = listOf(verifiedPrescription.medicineName, canonicalTarget, canonicalTarget.replace("-", ""), canonicalTarget.replace("-", " "))
+            val existingRecords = try {
+                adherenceDao.getAdherenceForCanonicalNamesInWindow(namesToCheck, wStart, wEnd)
+            } catch (e: Exception) {
+                emptyList()
+            }
+
+            val isDuplicateDose = existingRecords.any { it.status == "TAKEN" || it.status == "ON_TIME" || it.status == "LATE" }
+
+            if (isDuplicateDose) {
+                verification.copy(
+                    status = VerificationStatus.ALREADY_VERIFIED,
+                    message = "⚠️ Dose Already Verified\nThe $activeSlot dose of ${verifiedPrescription.medicineName} has already been verified for today.\nDose was not marked as taken again."
+                )
+            } else {
+                val verifiedInfo = getMedicineInfo(verifiedPrescription.medicineName)
+                val primaryIngredient = verifiedInfo?.genericName?.split("(")?.first()?.trim() ?: ""
+
+                var duplicateIngredientBrand: String? = null
+                if (primaryIngredient.isNotBlank()) {
+                    try {
+                        val windowRecords = adherenceDao.getAdherenceSince(wStart).first()
+                        for (rec in windowRecords) {
+                            if (rec.status == "TAKEN" || rec.status == "ON_TIME" || rec.status == "LATE") {
+                                val recCanonical = com.smartmedguardian.util.MedicineNameCanonicalizer.canonicalize(rec.medicineName)
+                                if (!com.smartmedguardian.util.MedicineNameCanonicalizer.isSameMedicine(recCanonical, canonicalTarget)) {
+                                    val recInfo = getMedicineInfo(rec.medicineName)
+                                    if (recInfo != null && recInfo.genericName.contains(primaryIngredient, ignoreCase = true)) {
+                                        duplicateIngredientBrand = rec.medicineName
+                                        break
+                                    }
+                                }
+                            }
+                        }
+                    } catch (ignored: Exception) {}
+                }
+
+                if (duplicateIngredientBrand != null) {
+                    verification.copy(
+                        status = VerificationStatus.DUPLICATE_INGREDIENT,
+                        message = "⚠️ Duplicate Active Ingredient Warning\nAnother medication ($duplicateIngredientBrand) containing the same active ingredient ($primaryIngredient) has already been recorded for this dose window.\nPlease consult your physician before taking this dose."
+                    )
+                } else {
+                    verification
+                }
+            }
+        } else {
+            verification
+        }
+
+        // Synchronized database persistence based on final verification status
+        if (finalVerification.status == VerificationStatus.CORRECT_MEDICINE && finalVerification.prescription != null) {
+            val verifiedPrescription = finalVerification.prescription
             val scheduledMillis = verificationManager.getScheduledTimeMillis(verifiedPrescription, activeSlot, cleanTargetTime, currentTime, currentDate)
             val actualMillis = System.currentTimeMillis()
 
@@ -517,52 +645,82 @@ class MedicineRepositoryImpl @Inject constructor(
                 status = adherenceStatus,
                 delayMinutes = delayMinutes
             )
-            insertAdherenceRecord(record)
 
-            // Trigger Caregiver Medication Taken Notification AFTER successful Room AdherenceRecord insertion
-            CoroutineScope(Dispatchers.IO).launch {
-                try {
-                    notifyCaregiverMedicationTaken(
-                        record = record,
-                        prescription = verifiedPrescription,
-                        slotName = activeSlot,
-                        explicitTimeStr = cleanTargetTime
-                    )
-                } catch (e: Exception) {
-                    Log.e("CaregiverNotification", "Notification failed: ${e.message}", e)
+            val (wStart, wEnd) = verificationManager.getSlotTimeWindowMillis(activeSlot, currentTime, currentDate)
+            val canonicalTarget = com.smartmedguardian.util.MedicineNameCanonicalizer.canonicalize(verifiedPrescription.medicineName)
+            val namesToCheck = listOf(verifiedPrescription.medicineName, canonicalTarget)
+            val doubleCheck = try {
+                adherenceDao.getAdherenceForCanonicalNamesInWindow(namesToCheck, wStart, wEnd)
+            } catch (e: Exception) { emptyList() }
+
+            val existingMissed = doubleCheck.firstOrNull { it.status == "MISSED" }
+            if (existingMissed != null) {
+                val updatedRecord = existingMissed.copy(
+                    actualTime = actualMillis,
+                    status = "LATE",
+                    delayMinutes = delayMinutes
+                )
+                adherenceDao.updateAdherenceRecord(updatedRecord)
+                uploadAdherence(updatedRecord)
+
+                CoroutineScope(Dispatchers.IO).launch {
+                    try {
+                        notifyCaregiverMedicationTaken(
+                            record = updatedRecord,
+                            prescription = verifiedPrescription,
+                            slotName = activeSlot,
+                            explicitTimeStr = cleanTargetTime
+                        )
+                    } catch (e: Exception) {
+                        Log.e("CaregiverNotification", "Notification failed: ${e.message}", e)
+                    }
+                }
+            } else if (!doubleCheck.any { it.status == "TAKEN" || it.status == "ON_TIME" || it.status == "LATE" }) {
+                insertAdherenceRecord(record)
+
+                CoroutineScope(Dispatchers.IO).launch {
+                    try {
+                        notifyCaregiverMedicationTaken(
+                            record = record,
+                            prescription = verifiedPrescription,
+                            slotName = activeSlot,
+                            explicitTimeStr = cleanTargetTime
+                        )
+                    } catch (e: Exception) {
+                        Log.e("CaregiverNotification", "Notification failed: ${e.message}", e)
+                    }
                 }
             }
 
             val history = MedicineHistory(
                 detectedMedicineName = verifiedPrescription.medicineName,
-                confidence = verification.recognitionResult.confidence,
+                confidence = finalVerification.recognitionResult.confidence,
                 timestamp = System.currentTimeMillis(),
                 verificationStatus = VerificationStatus.CORRECT_MEDICINE.name,
                 prescriptionId = verifiedPrescription.id
             )
             insertHistory(history)
         } else {
-            val historyName = verification.prescription?.medicineName 
-                ?: verification.recognitionResult.name.ifBlank { "Unknown" }
+            val historyName = finalVerification.prescription?.medicineName 
+                ?: finalVerification.recognitionResult.name.ifBlank { "Unknown" }
 
             val history = MedicineHistory(
                 detectedMedicineName = historyName,
-                confidence = verification.recognitionResult.confidence,
+                confidence = finalVerification.recognitionResult.confidence,
                 timestamp = System.currentTimeMillis(),
-                verificationStatus = verification.status.name,
-                prescriptionId = verification.prescription?.id
+                verificationStatus = finalVerification.status.name,
+                prescriptionId = finalVerification.prescription?.id
             )
             insertHistory(history)
 
-            // Trigger Caregiver Alert for safety / wrong medicine / duplicate dose
             CoroutineScope(Dispatchers.IO).launch {
                 try {
-                    when (verification.status) {
-                        VerificationStatus.ALREADY_VERIFIED -> {
+                    when (finalVerification.status) {
+                        VerificationStatus.ALREADY_VERIFIED, VerificationStatus.DUPLICATE_INGREDIENT -> {
                             createCaregiverAlert(
                                 eventType = "DUPLICATE_DOSE",
                                 medicineName = historyName,
-                                message = "Duplicate dose attempt detected for $historyName"
+                                message = finalVerification.message ?: "Duplicate dose attempt detected for $historyName"
                             )
                         }
                         VerificationStatus.UNSCHEDULED_TIME -> {
@@ -583,7 +741,7 @@ class MedicineRepositoryImpl @Inject constructor(
                             createCaregiverAlert(
                                 eventType = "SAFETY_WARNING",
                                 medicineName = historyName,
-                                message = "Unable to verify medicine safety: ${verification.message}"
+                                message = "Unable to verify medicine safety: ${finalVerification.message}"
                             )
                         }
                         else -> {}
@@ -594,7 +752,7 @@ class MedicineRepositoryImpl @Inject constructor(
             }
         }
 
-        verification
+        finalVerification
     }
 
     private suspend fun notifyCaregiverMedicationTaken(
@@ -680,7 +838,8 @@ class MedicineRepositoryImpl @Inject constructor(
     }
 
     override suspend fun getMedicineInfo(name: String): MedicineInfo? {
-        return safetyDao.getMedicineInfoByName(name)
+        val canonicalName = com.smartmedguardian.util.MedicineNameCanonicalizer.canonicalize(name)
+        return safetyDao.getMedicineInfoByName(canonicalName) ?: safetyDao.getMedicineInfoByName(name)
     }
 
     override suspend fun getMedicineByBarcode(barcode: String): MedicineInfo? {
@@ -716,7 +875,7 @@ class MedicineRepositoryImpl @Inject constructor(
     override fun getAllAdherenceRecords(): Flow<List<AdherenceRecord>> = adherenceDao.getAllAdherenceRecords()
 
     override suspend fun insertAdherenceRecord(record: AdherenceRecord) {
-        Log.d("AdherenceDebug", "Adherence record inserted: medicineName=${record.medicineName}, status=${record.status}, scheduledTime=${record.scheduledTime}, actualTime=${record.actualTime}, delayMinutes=${record.delayMinutes}")
+        Log.d("AdherenceDebug", "Adherence record inserted: status=${record.status}, scheduledTime=${record.scheduledTime}, actualTime=${record.actualTime}, delayMinutes=${record.delayMinutes}")
         adherenceDao.insertAdherenceRecord(record)
         CoroutineScope(Dispatchers.IO).launch {
             uploadAdherence(record)
@@ -738,6 +897,64 @@ class MedicineRepositoryImpl @Inject constructor(
 
     override suspend fun getAdherenceForMedicineInWindow(name: String, startTime: Long, endTime: Long): List<AdherenceRecord> {
         return adherenceDao.getAdherenceForMedicineInWindow(name, startTime, endTime)
+    }
+
+    override suspend fun getAdherenceForCanonicalNamesInWindow(names: List<String>, startTime: Long, endTime: Long): List<AdherenceRecord> {
+        return adherenceDao.getAdherenceForCanonicalNamesInWindow(names, startTime, endTime)
+    }
+
+    override suspend fun getRecordByDoseId(doseId: String): AdherenceRecord? {
+        return adherenceDao.getRecordByDoseId(doseId)
+    }
+
+    override suspend fun markDoseMissed(
+        scheduledDoseId: String,
+        medicineName: String,
+        scheduledTime: Long,
+        dosage: String,
+        slotName: String
+    ): AdherenceRecord = withContext(Dispatchers.IO) {
+        val existing = adherenceDao.getRecordByDoseId(scheduledDoseId)
+        if (existing != null) {
+            if (existing.status == "MISSED" && existing.caregiverNotified) {
+                return@withContext existing
+            }
+            val updated = existing.copy(
+                status = "MISSED",
+                caregiverNotified = true,
+                notificationStatus = "SENT",
+                notificationTimestamp = System.currentTimeMillis()
+            )
+            adherenceDao.updateAdherenceRecord(updated)
+            uploadAdherence(updated)
+            return@withContext updated
+        }
+
+        val record = AdherenceRecord(
+            medicineName = medicineName,
+            scheduledTime = scheduledTime,
+            actualTime = null,
+            status = "MISSED",
+            scheduledDoseId = scheduledDoseId,
+            caregiverNotified = true,
+            notificationStatus = "SENT",
+            notificationTimestamp = System.currentTimeMillis()
+        )
+        adherenceDao.insertAdherenceRecord(record)
+        uploadAdherence(record)
+
+        try {
+            createCaregiverAlert(
+                eventType = "MISSED_DOSE",
+                medicineName = medicineName,
+                message = "Missed $slotName dose (${dosage.ifBlank { "as prescribed" }})",
+                scheduledTime = scheduledTime
+            )
+        } catch (e: Exception) {
+            Log.e("MedicineRepository", "Failed to create caregiver alert for missed dose: ${e.message}", e)
+        }
+
+        record
     }
 
     override fun getCaregiver(): Flow<CaregiverInfo?> = adherenceDao.getCaregiver()
@@ -776,7 +993,7 @@ class MedicineRepositoryImpl @Inject constructor(
 
         val alertId = "alert_${System.currentTimeMillis()}_${(1000..9999).random()}"
 
-        Log.d("SMARTMED_CAREGIVER", "Creating caregiver alert: alertId=$alertId, patientId=$patientId, caregiverId=$caregiverId, eventType=$eventType, medicine=$medicineName")
+        Log.d("SMARTMED_CAREGIVER", "Creating caregiver alert: alertId=$alertId, eventType=$eventType")
         Log.d("SMARTMED_CAREGIVER", "FCM token available: ${!fcmToken.isNullOrBlank()}")
 
         val alert = CaregiverAlert(
@@ -904,8 +1121,8 @@ class MedicineRepositoryImpl @Inject constructor(
     }
 
     override fun getRemoteCaregiverAlerts(patientId: String): Flow<List<CaregiverAlert>> {
-        return firestore.collection("users").document(patientId)
-            .collection("caregiver_alerts")
+        return firestore.collection("caregiver_alerts")
+            .whereEqualTo("patientId", patientId)
             .snapshots()
             .map { snapshot -> snapshot.toObjects<CaregiverAlert>() }
     }
@@ -933,10 +1150,14 @@ class MedicineRepositoryImpl @Inject constructor(
     }
 
     override suspend fun uploadRisk(risk: RiskAssessment) {
-        val userId = auth.currentUser?.uid ?: return
-        firestore.collection("users").document(userId)
-            .collection("risk").document("latest")
-            .set(risk).await()
+        try {
+            val userId = auth.currentUser?.uid ?: return
+            firestore.collection("users").document(userId)
+                .collection("risk").document("latest")
+                .set(risk).await()
+        } catch (e: Exception) {
+            Log.e("MedicineRepository", "Failed to upload risk to Firestore: ${e.message}", e)
+        }
     }
 
     override suspend fun syncLocalToCloud() {
@@ -966,6 +1187,30 @@ class MedicineRepositoryImpl @Inject constructor(
             firestore.collection("users").document(userId)
                 .collection("allergies").document(allergy.allergen)
                 .set(allergy).await()
+        }
+    }
+
+    override suspend fun getMedicinesForCondition(conditionName: String): List<String> = withContext(Dispatchers.IO) {
+        medicineConditionDao.getMedicinesForCondition(conditionName)
+    }
+
+    override suspend fun getConditionPrescriptions(conditionName: String): List<Prescription> = withContext(Dispatchers.IO) {
+        val meds = getMedicinesForCondition(conditionName)
+        val allPresc = prescriptionDao.getAllPrescriptions().first()
+        allPresc.filter { presc ->
+            meds.any { med ->
+                com.smartmedguardian.util.MedicineNameCanonicalizer.isSameMedicine(presc.medicineName, med)
+            }
+        }
+    }
+
+    override suspend fun getConditionAdherenceRecords(conditionName: String, startTime: Long, endTime: Long): List<AdherenceRecord> = withContext(Dispatchers.IO) {
+        val meds = getMedicinesForCondition(conditionName)
+        val allRecords = adherenceDao.getAllAdherenceRecords().first()
+        allRecords.filter { rec ->
+            rec.scheduledTime in startTime..endTime && meds.any { med ->
+                com.smartmedguardian.util.MedicineNameCanonicalizer.isSameMedicine(rec.medicineName, med)
+            }
         }
     }
 }

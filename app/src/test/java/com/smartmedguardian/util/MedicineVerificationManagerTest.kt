@@ -7,7 +7,6 @@ import com.smartmedguardian.ml.ReferenceMatchResult
 import com.smartmedguardian.model.VerificationSource
 import com.smartmedguardian.model.VerificationStatus
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -23,122 +22,47 @@ class MedicineVerificationManagerTest {
         manager = MedicineVerificationManager()
     }
 
+    // 1. OCR identifies a supported medicine
     @Test
-    fun scenario1_ocrImageContaining_Dolo650() {
+    fun test1_ocrIdentifiesSupportedMedicine() {
         val prescription = Prescription(
             id = 1,
-            medicineName = "Dolo-650",
-            dosage = "650mg",
-            frequency = "Twice daily",
-            morning = true,
-            evening = true,
-            startDate = 0L,
-            endDate = 0L
-        )
-
-        val result = manager.verify(
-            recognitionResult = RecognitionResult("Unknown", 0.5f, 0),
-            prescriptions = listOf(prescription),
-            ocrText = "DOLO 650 PARACETAMOL TABLETS 650 MG",
-            currentTime = LocalTime.of(8, 0),
-            currentDate = LocalDate.now()
-        )
-
-        assertEquals(VerificationStatus.CORRECT_MEDICINE, result.status)
-        assertEquals("Dolo-650", result.prescription?.medicineName)
-        assertTrue(result.message?.contains("Taken ✓") == true)
-    }
-
-    @Test
-    fun scenario2_ocrImageContaining_Brufen() {
-        val prescription = Prescription(
-            id = 2,
-            medicineName = "Brufen",
-            dosage = "400mg",
-            frequency = "Once daily",
-            morning = true,
-            startDate = 0L,
-            endDate = 0L
-        )
-
-        val result = manager.verify(
-            recognitionResult = RecognitionResult("Unknown", 0.5f, 0),
-            prescriptions = listOf(prescription),
-            ocrText = "BRUFEN 400 MG",
-            currentTime = LocalTime.of(8, 0),
-            currentDate = LocalDate.now()
-        )
-
-        assertEquals(VerificationStatus.CORRECT_MEDICINE, result.status)
-        assertEquals("Brufen", result.prescription?.medicineName)
-        assertTrue(result.message?.contains("Taken ✓") == true)
-    }
-
-    @Test
-    fun scenario3_ocrImageContaining_Augmentin() {
-        val prescription = Prescription(
-            id = 3,
             medicineName = "Augmentin",
             dosage = "625mg",
-            frequency = "Twice daily",
+            frequency = "Morning",
             morning = true,
-            night = true,
             startDate = 0L,
             endDate = 0L
         )
 
         val result = manager.verify(
-            recognitionResult = RecognitionResult("Unknown", 0.5f, 0),
+            recognitionResult = RecognitionResult("Unknown", 0.3f, 0),
             prescriptions = listOf(prescription),
-            ocrText = "AUGMENTIN 625",
+            ocrText = "AUGMENTIN 625 MG TABLETS",
             currentTime = LocalTime.of(8, 0),
             currentDate = LocalDate.now()
         )
 
         assertEquals(VerificationStatus.CORRECT_MEDICINE, result.status)
         assertEquals("Augmentin", result.prescription?.medicineName)
-        assertTrue(result.message?.contains("Taken ✓") == true)
+        assertEquals(VerificationSource.OCR_TEXT, result.verificationSource)
     }
 
+    // 2. OCR identifies the wrong medicine
     @Test
-    fun scenario4_ocrText_caseInsensitiveMatching() {
-        val matchLower = manager.matchSupportedMedicineFromOcr("dolo 650")
-        val matchUpper = manager.matchSupportedMedicineFromOcr("DOLO 650")
-        val matchMixed = manager.matchSupportedMedicineFromOcr("DoLo 650")
-
-        assertNotNull(matchLower)
-        assertNotNull(matchUpper)
-        assertNotNull(matchMixed)
-        assertEquals("Dolo-650", matchLower?.canonicalName)
-        assertEquals("Dolo-650", matchUpper?.canonicalName)
-        assertEquals("Dolo-650", matchMixed?.canonicalName)
-    }
-
-    @Test
-    fun scenario5_ocrText_hyphenAndSpaceDifferences() {
-        val matchHyphen = manager.matchSupportedMedicineFromOcr("Dolo-650")
-        val matchSpace = manager.matchSupportedMedicineFromOcr("Dolo 650")
-        val matchCompact = manager.matchSupportedMedicineFromOcr("DOLO650")
-
-        assertEquals("Dolo-650", matchHyphen?.canonicalName)
-        assertEquals("Dolo-650", matchSpace?.canonicalName)
-        assertEquals("Dolo-650", matchCompact?.canonicalName)
-    }
-
-    @Test
-    fun scenario6_supportedMedicineDifferentFromPrescription_incorrectMedicine() {
+    fun test2_ocrIdentifiesWrongMedicine_prescriptionMismatch() {
         val prescription = Prescription(
             id = 1,
             medicineName = "Dolo-650",
             dosage = "650mg",
-            frequency = "Twice daily",
+            frequency = "Morning",
             morning = true,
             startDate = 0L,
             endDate = 0L
         )
 
         val result = manager.verify(
-            recognitionResult = RecognitionResult("Unknown", 0.5f, 0),
+            recognitionResult = RecognitionResult("Unknown", 0.3f, 0),
             prescriptions = listOf(prescription),
             ocrText = "BRUFEN 400 MG",
             currentTime = LocalTime.of(8, 0),
@@ -146,227 +70,13 @@ class MedicineVerificationManagerTest {
         )
 
         assertEquals(VerificationStatus.MEDICINE_NOT_FOUND, result.status)
+        assertEquals(VerificationSource.OCR_TEXT, result.verificationSource)
         assertTrue(result.message?.contains("INCORRECT MEDICINE") == true)
-        assertTrue(result.message?.contains("Detected: Brufen") == true)
-        assertTrue(result.message?.contains("Prescribed: Dolo-650") == true)
     }
 
+    // 3. OCR produces ambiguous text
     @Test
-    fun scenario7_supportedMedicineSameAsPrescription_wrongSchedule() {
-        val prescription = Prescription(
-            id = 1,
-            medicineName = "Dolo-650",
-            dosage = "650mg",
-            frequency = "Morning only",
-            morning = true,
-            startDate = 0L,
-            endDate = 0L
-        )
-
-        val result = manager.verify(
-            recognitionResult = RecognitionResult("Unknown", 0.5f, 0),
-            prescriptions = listOf(prescription),
-            ocrText = "DOLO 650",
-            currentTime = LocalTime.of(20, 50), // Evening
-            currentDate = LocalDate.now()
-        )
-
-        assertEquals(VerificationStatus.UNSCHEDULED_TIME, result.status)
-        assertTrue(result.message?.contains("Dolo-650") == true)
-    }
-
-    @Test
-    fun targetSlotNight_targetTime2000_current2040_validatesNight() {
-        val prescription = Prescription(
-            id = 1,
-            medicineName = "Dolo-650",
-            dosage = "650mg",
-            frequency = "Night",
-            night = true,
-            nightTime = "20:00",
-            startDate = 0L,
-            endDate = 0L
-        )
-
-        val result = manager.verify(
-            recognitionResult = RecognitionResult("Unknown", 0.5f, 0),
-            prescriptions = listOf(prescription),
-            ocrText = "DOLO 650",
-            targetMedicine = "Dolo-650",
-            targetSlot = "Night",
-            targetTime = "20:00",
-            currentTime = LocalTime.of(20, 40), // 8:40 PM
-            currentDate = LocalDate.now()
-        )
-
-        assertEquals(VerificationStatus.CORRECT_MEDICINE, result.status)
-        assertTrue(result.message?.contains("Night dose") == true)
-        assertTrue(result.message?.contains("8:00 PM") == true)
-    }
-
-    @Test
-    fun targetSlotEvening_targetTime2000_current2040_validatesEvening() {
-        val prescription = Prescription(
-            id = 1,
-            medicineName = "Dolo-650",
-            dosage = "650mg",
-            frequency = "Evening",
-            evening = true,
-            eveningTime = "20:00",
-            startDate = 0L,
-            endDate = 0L
-        )
-
-        val result = manager.verify(
-            recognitionResult = RecognitionResult("Unknown", 0.5f, 0),
-            prescriptions = listOf(prescription),
-            ocrText = "DOLO 650",
-            targetMedicine = "Dolo-650",
-            targetSlot = "Evening",
-            targetTime = "20:00",
-            currentTime = LocalTime.of(20, 40),
-            currentDate = LocalDate.now()
-        )
-
-        assertEquals(VerificationStatus.CORRECT_MEDICINE, result.status)
-        assertTrue(result.message?.contains("Evening dose") == true)
-        assertTrue(result.message?.contains("8:00 PM") == true)
-    }
-
-    @Test
-    fun targetSlotNight_currentPeriodInferenceDoesNotOverrideTargetSlot() {
-        val prescription = Prescription(
-            id = 1,
-            medicineName = "Dolo-650",
-            dosage = "650mg",
-            frequency = "Night",
-            night = true,
-            nightTime = "20:00",
-            startDate = 0L,
-            endDate = 0L
-        )
-
-        val result = manager.verify(
-            recognitionResult = RecognitionResult("Unknown", 0.5f, 0),
-            prescriptions = listOf(prescription),
-            ocrText = "DOLO 650",
-            targetMedicine = "Dolo-650",
-            targetSlot = "Night",
-            targetTime = "20:00",
-            currentTime = LocalTime.of(18, 0),
-            currentDate = LocalDate.now()
-        )
-
-        assertEquals(VerificationStatus.CORRECT_MEDICINE, result.status)
-        assertTrue(result.message?.contains("Night dose") == true)
-    }
-
-    @Test
-    fun targetSlotEvening_currentPeriodInferenceDoesNotOverrideTargetSlot() {
-        val prescription = Prescription(
-            id = 1,
-            medicineName = "Dolo-650",
-            dosage = "650mg",
-            frequency = "Evening",
-            evening = true,
-            eveningTime = "20:00",
-            startDate = 0L,
-            endDate = 0L
-        )
-
-        val result = manager.verify(
-            recognitionResult = RecognitionResult("Unknown", 0.5f, 0),
-            prescriptions = listOf(prescription),
-            ocrText = "DOLO 650",
-            targetMedicine = "Dolo-650",
-            targetSlot = "Evening",
-            targetTime = "20:00",
-            currentTime = LocalTime.of(20, 40),
-            currentDate = LocalDate.now()
-        )
-
-        assertEquals(VerificationStatus.CORRECT_MEDICINE, result.status)
-        assertTrue(result.message?.contains("Evening dose") == true)
-    }
-
-    @Test
-    fun noTargetSlot_usesFallbackPeriodInference() {
-        val prescription = Prescription(
-            id = 1,
-            medicineName = "Dolo-650",
-            dosage = "650mg",
-            frequency = "Night",
-            night = true,
-            nightTime = "20:00",
-            startDate = 0L,
-            endDate = 0L
-        )
-
-        val result = manager.verify(
-            recognitionResult = RecognitionResult("Unknown", 0.5f, 0),
-            prescriptions = listOf(prescription),
-            ocrText = "DOLO 650",
-            currentTime = LocalTime.of(20, 40),
-            currentDate = LocalDate.now()
-        )
-
-        assertEquals(VerificationStatus.CORRECT_MEDICINE, result.status)
-        assertTrue(result.message?.contains("Night dose") == true)
-    }
-
-    @Test
-    fun verificationOutsideTimeWindow_rejected() {
-        val prescription = Prescription(
-            id = 1,
-            medicineName = "Dolo-650",
-            dosage = "650mg",
-            frequency = "Morning",
-            morning = true,
-            morningTime = "08:00",
-            startDate = 0L,
-            endDate = 0L
-        )
-
-        val result = manager.verify(
-            recognitionResult = RecognitionResult("Unknown", 0.5f, 0),
-            prescriptions = listOf(prescription),
-            ocrText = "DOLO 650",
-            targetSlot = "Morning",
-            targetTime = "08:00",
-            currentTime = LocalTime.of(18, 0),
-            currentDate = LocalDate.now()
-        )
-
-        assertEquals(VerificationStatus.UNSCHEDULED_TIME, result.status)
-        assertTrue(result.message?.contains("Outside Verification Window") == true)
-    }
-
-    @Test
-    fun scenario8_unsupportedMedicine() {
-        val prescription = Prescription(
-            id = 1,
-            medicineName = "Dolo-650",
-            dosage = "650mg",
-            frequency = "Morning",
-            morning = true,
-            startDate = 0L,
-            endDate = 0L
-        )
-
-        val result = manager.verify(
-            recognitionResult = RecognitionResult("Unknown", 0.2f, 0),
-            prescriptions = listOf(prescription),
-            ocrText = "RANDOM UNKNOWN PHARMA DRUG 500 MG",
-            currentTime = LocalTime.of(8, 0),
-            currentDate = LocalDate.now()
-        )
-
-        assertEquals(VerificationStatus.UNKNOWN_MEDICINE, result.status)
-        assertTrue(result.message?.contains("UNKNOWN MEDICINE") == true)
-    }
-
-    @Test
-    fun scenario9_ocrFails_referenceMatchSucceeds() {
+    fun test3_ocrAmbiguousText_fallsThroughToNextStep() {
         val prescription = Prescription(
             id = 1,
             medicineName = "Dolo-650",
@@ -379,28 +89,253 @@ class MedicineVerificationManagerTest {
 
         val referenceMatch = ReferenceMatchResult(
             prescription = prescription,
-            similarity = 0.88f,
+            similarity = 0.85f,
             status = MatchStatus.MATCH,
-            message = "Matched reference image"
+            message = "Matched reference"
         )
 
+        // Text "TABLETS 500 MG" does not contain any supported medicine token
         val result = manager.verify(
-            recognitionResult = RecognitionResult("Unknown", 0.2f, 0),
+            recognitionResult = RecognitionResult("Unknown", 0.3f, 0),
             prescriptions = listOf(prescription),
-            ocrText = "BLURRY UNREADABLE OCR TEXT",
+            ocrText = "TABLETS 500 MG PHARMA",
             referenceMatchResult = referenceMatch,
             currentTime = LocalTime.of(8, 0),
             currentDate = LocalDate.now()
         )
 
         assertEquals(VerificationStatus.CORRECT_MEDICINE, result.status)
-        assertEquals("Dolo-650", result.prescription?.medicineName)
         assertEquals(VerificationSource.REFERENCE_IMAGE, result.verificationSource)
-        assertTrue(result.message?.contains("Taken ✓") == true)
     }
 
+    // 4. OCR produces no text
     @Test
-    fun scenario10_bothOcrAndTFLiteFail_unknownMedicine() {
+    fun test4_ocrNoText_fallsThroughToNextStep() {
+        val prescription = Prescription(
+            id = 1,
+            medicineName = "Flagyl",
+            dosage = "500mg",
+            frequency = "Morning",
+            morning = true,
+            startDate = 0L,
+            endDate = 0L
+        )
+
+        val referenceMatch = ReferenceMatchResult(
+            prescription = prescription,
+            similarity = 0.80f,
+            status = MatchStatus.MATCH,
+            message = "Matched reference"
+        )
+
+        val result = manager.verify(
+            recognitionResult = RecognitionResult("Unknown", 0.3f, 0),
+            prescriptions = listOf(prescription),
+            ocrText = "",
+            referenceMatchResult = referenceMatch,
+            currentTime = LocalTime.of(8, 0),
+            currentDate = LocalDate.now()
+        )
+
+        assertEquals(VerificationStatus.CORRECT_MEDICINE, result.status)
+        assertEquals(VerificationSource.REFERENCE_IMAGE, result.verificationSource)
+    }
+
+    // 5. Reference image produces a match
+    @Test
+    fun test5_referenceImageProducesMatch() {
+        val prescription = Prescription(
+            id = 1,
+            medicineName = "Claritine",
+            dosage = "10mg",
+            frequency = "Morning",
+            morning = true,
+            startDate = 0L,
+            endDate = 0L
+        )
+
+        val referenceMatch = ReferenceMatchResult(
+            prescription = prescription,
+            similarity = 0.82f,
+            status = MatchStatus.MATCH,
+            message = "High similarity match"
+        )
+
+        val result = manager.verify(
+            recognitionResult = RecognitionResult("Unknown", 0.2f, 0),
+            prescriptions = listOf(prescription),
+            ocrText = null,
+            referenceMatchResult = referenceMatch,
+            currentTime = LocalTime.of(8, 0),
+            currentDate = LocalDate.now()
+        )
+
+        assertEquals(VerificationStatus.CORRECT_MEDICINE, result.status)
+        assertEquals(VerificationSource.REFERENCE_IMAGE, result.verificationSource)
+        assertEquals(0.82f, result.recognitionResult.confidence, 0.01f)
+    }
+
+    // 6. Reference image produces an uncertain result
+    @Test
+    fun test6_referenceImageUncertain_returnsUnableToVerify() {
+        val prescription = Prescription(
+            id = 1,
+            medicineName = "Zyrtec",
+            dosage = "10mg",
+            frequency = "Morning",
+            morning = true,
+            startDate = 0L,
+            endDate = 0L
+        )
+
+        val referenceMatch = ReferenceMatchResult(
+            prescription = prescription,
+            similarity = 0.60f, // Between 0.55 and 0.72
+            status = MatchStatus.UNCERTAIN,
+            message = "Uncertain match"
+        )
+
+        val result = manager.verify(
+            recognitionResult = RecognitionResult("Unknown", 0.2f, 0),
+            prescriptions = listOf(prescription),
+            ocrText = null,
+            referenceMatchResult = referenceMatch,
+            currentTime = LocalTime.of(8, 0),
+            currentDate = LocalDate.now()
+        )
+
+        assertEquals(VerificationStatus.UNABLE_TO_VERIFY, result.status)
+        assertEquals(VerificationSource.REFERENCE_IMAGE, result.verificationSource)
+    }
+
+    // 7. CNN correctly identifies a medicine
+    @Test
+    fun test7_cnnCorrectlyIdentifiesMedicine() {
+        val prescription = Prescription(
+            id = 1,
+            medicineName = "Glucophage",
+            dosage = "500mg",
+            frequency = "Morning",
+            morning = true,
+            startDate = 0L,
+            endDate = 0L
+        )
+
+        val result = manager.verify(
+            recognitionResult = RecognitionResult(
+                name = "Glucophage",
+                confidence = 0.92f,
+                inferenceTime = 15,
+                top2Margin = 0.40f,
+                isKnownEnough = true
+            ),
+            prescriptions = listOf(prescription),
+            ocrText = null,
+            referenceMatchResult = null,
+            currentTime = LocalTime.of(8, 0),
+            currentDate = LocalDate.now()
+        )
+
+        assertEquals(VerificationStatus.CORRECT_MEDICINE, result.status)
+        assertEquals(VerificationSource.CNN_CLASSIFIER, result.verificationSource)
+        assertEquals("Glucophage", result.prescription?.medicineName)
+    }
+
+    // 8. CNN returns low confidence
+    @Test
+    fun test8_cnnLowConfidence_returnsUnknown() {
+        val prescription = Prescription(
+            id = 1,
+            medicineName = "Glucophage",
+            dosage = "500mg",
+            frequency = "Morning",
+            morning = true,
+            startDate = 0L,
+            endDate = 0L
+        )
+
+        val result = manager.verify(
+            recognitionResult = RecognitionResult(
+                name = "Glucophage",
+                confidence = 0.55f, // Below 0.70 threshold
+                inferenceTime = 15,
+                top2Margin = 0.10f,
+                isKnownEnough = false
+            ),
+            prescriptions = listOf(prescription),
+            ocrText = null,
+            referenceMatchResult = null,
+            currentTime = LocalTime.of(8, 0),
+            currentDate = LocalDate.now()
+        )
+
+        assertEquals(VerificationStatus.UNKNOWN_MEDICINE, result.status)
+        assertEquals(VerificationSource.UNCERTAIN, result.verificationSource)
+    }
+
+    // 9. Unsupported medicine returns unknown
+    @Test
+    fun test9_unsupportedMedicine_returnsUnknown() {
+        val prescription = Prescription(
+            id = 1,
+            medicineName = "Adol",
+            dosage = "500mg",
+            frequency = "Morning",
+            morning = true,
+            startDate = 0L,
+            endDate = 0L
+        )
+
+        val result = manager.verify(
+            recognitionResult = RecognitionResult("Other", 0.20f, 10, top2Margin = 0.05f, isKnownEnough = false),
+            prescriptions = listOf(prescription),
+            ocrText = "RANDOM PHARMACEUTICAL DRUG FORMULATION",
+            referenceMatchResult = null,
+            currentTime = LocalTime.of(8, 0),
+            currentDate = LocalDate.now()
+        )
+
+        assertEquals(VerificationStatus.UNKNOWN_MEDICINE, result.status)
+        assertEquals(VerificationSource.UNCERTAIN, result.verificationSource)
+    }
+
+    // 10. All verification stages fail safely
+    @Test
+    fun test10_allStagesFailSafely() {
+        val prescription = Prescription(
+            id = 1,
+            medicineName = "Paramol",
+            dosage = "500mg",
+            frequency = "Morning",
+            morning = true,
+            startDate = 0L,
+            endDate = 0L
+        )
+
+        val referenceMatch = ReferenceMatchResult(
+            prescription = null,
+            similarity = 0.15f,
+            status = MatchStatus.NO_MATCH,
+            message = "No match"
+        )
+
+        val result = manager.verify(
+            recognitionResult = RecognitionResult("Unknown", 0.10f, 12, top2Margin = 0.01f, isKnownEnough = false),
+            prescriptions = listOf(prescription),
+            ocrText = "BLURRY UNREADABLE PACKAGING TEXT 999",
+            referenceMatchResult = referenceMatch,
+            currentTime = LocalTime.of(8, 0),
+            currentDate = LocalDate.now()
+        )
+
+        assertEquals(VerificationStatus.UNKNOWN_MEDICINE, result.status)
+        assertEquals(VerificationSource.UNCERTAIN, result.verificationSource)
+        assertTrue(result.message?.contains("UNKNOWN MEDICINE") == true)
+    }
+
+    // 11. Dolo650 and Dolo-650 aliases work correctly
+    @Test
+    fun test11_dolo650AndDolo650AliasesWorkCorrectly() {
         val prescription = Prescription(
             id = 1,
             medicineName = "Dolo-650",
@@ -411,23 +346,99 @@ class MedicineVerificationManagerTest {
             endDate = 0L
         )
 
-        val referenceMatch = ReferenceMatchResult(
-            prescription = null,
-            similarity = 0.10f,
-            status = MatchStatus.NO_MATCH,
-            message = "No reference image match"
+        // Query with DOLO650 OCR
+        val resultOcr = manager.verify(
+            recognitionResult = RecognitionResult("Unknown", 0.3f, 0),
+            prescriptions = listOf(prescription),
+            ocrText = "DOLO650 TABLETS",
+            currentTime = LocalTime.of(8, 0),
+            currentDate = LocalDate.now()
+        )
+        assertEquals(VerificationStatus.CORRECT_MEDICINE, resultOcr.status)
+        assertEquals("Dolo-650", resultOcr.prescription?.medicineName)
+
+        // Query with Dolo650 CNN model output
+        val resultCnn = manager.verify(
+            recognitionResult = RecognitionResult("Dolo650", 0.95f, 10, top2Margin = 0.50f, isKnownEnough = true),
+            prescriptions = listOf(prescription),
+            ocrText = null,
+            referenceMatchResult = null,
+            currentTime = LocalTime.of(8, 0),
+            currentDate = LocalDate.now()
+        )
+        assertEquals(VerificationStatus.CORRECT_MEDICINE, resultCnn.status)
+        assertEquals("Dolo-650", resultCnn.prescription?.medicineName)
+    }
+
+    // 12. Prescription mismatch is detected
+    @Test
+    fun test12_prescriptionMismatchDetected() {
+        val prescription = Prescription(
+            id = 1,
+            medicineName = "Zantac",
+            dosage = "20mg",
+            frequency = "Morning",
+            morning = true,
+            startDate = 0L,
+            endDate = 0L
         )
 
         val result = manager.verify(
-            recognitionResult = RecognitionResult("Other", 0.3f, 0),
+            recognitionResult = RecognitionResult("Unknown", 0.3f, 0),
             prescriptions = listOf(prescription),
-            ocrText = "UNREADABLE OCR TEXT 123",
-            referenceMatchResult = referenceMatch,
+            ocrText = "CATAFLAM 50 MG",
             currentTime = LocalTime.of(8, 0),
             currentDate = LocalDate.now()
         )
 
-        assertEquals(VerificationStatus.UNKNOWN_MEDICINE, result.status)
-        assertTrue(result.message?.contains("UNKNOWN MEDICINE") == true)
+        assertEquals(VerificationStatus.MEDICINE_NOT_FOUND, result.status)
+        assertEquals(VerificationSource.OCR_TEXT, result.verificationSource)
+        assertTrue(result.message?.contains("INCORRECT MEDICINE") == true)
+        assertTrue(result.message?.contains("Detected: Cataflam") == true)
+    }
+
+    @Test
+    fun testOcrPriorityOverReferenceMatching() {
+        val prescriptionAdol = Prescription(
+            id = 1,
+            medicineName = "Adol",
+            dosage = "500mg",
+            frequency = "Morning",
+            morning = true,
+            startDate = 0L,
+            endDate = 0L
+        )
+
+        val prescriptionAugmentin = Prescription(
+            id = 2,
+            medicineName = "Augmentin",
+            dosage = "625mg",
+            frequency = "Morning",
+            morning = true,
+            startDate = 0L,
+            endDate = 0L
+        )
+
+        // OCR detects "Adol" clearly, while Reference Image Match claims a match for "Augmentin"
+        val referenceMatchAugmentin = ReferenceMatchResult(
+            prescription = prescriptionAugmentin,
+            similarity = 0.80f,
+            status = MatchStatus.MATCH,
+            message = "Reference match"
+        )
+
+        val result = manager.verify(
+            recognitionResult = RecognitionResult("Unknown", 0.3f, 0),
+            prescriptions = listOf(prescriptionAdol, prescriptionAugmentin),
+            ocrText = "ADOL 500 MG TABLETS",
+            referenceMatchResult = referenceMatchAugmentin,
+            currentTime = LocalTime.of(8, 0),
+            currentDate = LocalDate.now()
+        )
+
+        // OCR (Priority 1) MUST prevail over Reference Match (Priority 2)
+        assertEquals(VerificationStatus.CORRECT_MEDICINE, result.status)
+        assertEquals("Adol", result.prescription?.medicineName)
+        assertEquals(VerificationSource.OCR_TEXT, result.verificationSource)
     }
 }

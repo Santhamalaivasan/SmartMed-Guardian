@@ -4,6 +4,7 @@ import android.app.AlarmManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.util.Log
 import androidx.work.ExistingPeriodicWorkPolicy
@@ -38,7 +39,18 @@ class ReminderScheduler @Inject constructor(
                 "night" -> 4
                 else -> 5
             }
-            return ((prescriptionId % 100000).toInt() * 10) + slotIndex
+            // 32-bit unique hashing without modulo wrap
+            return (prescriptionId.hashCode() * 31) + slotIndex
+        }
+
+        fun getSnoozeRequestCode(prescriptionId: Long, slotName: String): Int {
+            return getRequestCode(prescriptionId, slotName) + 5000000
+        }
+
+        fun getReminderDataString(prescriptionId: Long, slotName: String, isSnooze: Boolean = false): String {
+            val normSlot = slotName.lowercase(Locale.ROOT)
+            val path = if (isSnooze) "snooze" else "alarm"
+            return "smartmed://reminder/$path/$prescriptionId/$normSlot"
         }
 
         fun parseHourMinute(timeStr: String, defaultHour: Int): Pair<Int, Int> {
@@ -114,7 +126,7 @@ class ReminderScheduler @Inject constructor(
             target.set(Calendar.DAY_OF_MONTH, startCal.get(Calendar.DAY_OF_MONTH))
         }
 
-        while (target.before(now)) {
+        while (target.before(now) || target.timeInMillis <= now.timeInMillis) {
             target.add(Calendar.DAY_OF_YEAR, 1)
         }
 
@@ -124,10 +136,12 @@ class ReminderScheduler @Inject constructor(
         }
 
         val requestCode = getRequestCode(prescription.id, slotName)
+        val dataStr = getReminderDataString(prescription.id, slotName, isSnooze = false)
         val formattedTime = format12HourTime(hour, minute)
 
         val intent = Intent(context, ReminderAlarmReceiver::class.java).apply {
             action = ACTION_MEDICATION_REMINDER
+            data = Uri.parse(dataStr)
             putExtra("prescriptionId", prescription.id)
             putExtra("medicineName", prescription.medicineName)
             putExtra("dosage", prescription.dosage)
@@ -144,28 +158,36 @@ class ReminderScheduler @Inject constructor(
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        val showIntent = Intent(context, com.smartmedguardian.MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val showPendingIntent = PendingIntent.getActivity(
+            context,
+            requestCode + 20000000,
+            showIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val alarmClockInfo = AlarmManager.AlarmClockInfo(target.timeInMillis, showPendingIntent)
+
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !alarmManager.canScheduleExactAlarms()) {
+            alarmManager.setAlarmClock(alarmClockInfo, pendingIntent)
+            Log.d("ReminderScheduler", "Exact alarm clock scheduled for prescription ${prescription.id} ($slotName) at ${target.time}")
+        } catch (e: Exception) {
+            Log.e("ReminderScheduler", "Exception setting alarm clock, falling back to setAndAllowWhileIdle", e)
+            try {
                 alarmManager.setAndAllowWhileIdle(
                     AlarmManager.RTC_WAKEUP,
                     target.timeInMillis,
                     pendingIntent
                 )
-            } else {
-                alarmManager.setExactAndAllowWhileIdle(
+            } catch (e2: Exception) {
+                alarmManager.set(
                     AlarmManager.RTC_WAKEUP,
                     target.timeInMillis,
                     pendingIntent
                 )
             }
-            Log.d("ReminderScheduler", "Exact alarm scheduled for ${prescription.medicineName} ($slotName) at ${target.time}")
-        } catch (e: SecurityException) {
-            Log.e("ReminderScheduler", "SecurityException setting exact alarm", e)
-            alarmManager.set(
-                AlarmManager.RTC_WAKEUP,
-                target.timeInMillis,
-                pendingIntent
-            )
         }
     }
 
@@ -177,10 +199,12 @@ class ReminderScheduler @Inject constructor(
         snoozeMinutes: Int = 15
     ) {
         val snoozeTime = System.currentTimeMillis() + (snoozeMinutes * 60 * 1000L)
-        val requestCode = getRequestCode(prescriptionId, slotName) + 500000
+        val requestCode = getSnoozeRequestCode(prescriptionId, slotName)
+        val dataStr = getReminderDataString(prescriptionId, slotName, isSnooze = true)
 
         val intent = Intent(context, ReminderAlarmReceiver::class.java).apply {
             action = ACTION_MEDICATION_REMINDER
+            data = Uri.parse(dataStr)
             putExtra("prescriptionId", prescriptionId)
             putExtra("medicineName", medicineName)
             putExtra("dosage", "")
@@ -196,23 +220,37 @@ class ReminderScheduler @Inject constructor(
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        val showIntent = Intent(context, com.smartmedguardian.MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val showPendingIntent = PendingIntent.getActivity(
+            context,
+            requestCode + 20000000,
+            showIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val alarmClockInfo = AlarmManager.AlarmClockInfo(snoozeTime, showPendingIntent)
+
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !alarmManager.canScheduleExactAlarms()) {
-                alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, snoozeTime, pendingIntent)
-            } else {
-                alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, snoozeTime, pendingIntent)
-            }
-            Log.d("ReminderScheduler", "Snooze alarm scheduled for $medicineName in $snoozeMinutes minutes")
+            alarmManager.setAlarmClock(alarmClockInfo, pendingIntent)
+            Log.d("ReminderScheduler", "Snooze alarm clock scheduled for prescription $prescriptionId in $snoozeMinutes minutes")
         } catch (e: Exception) {
-            Log.e("ReminderScheduler", "Error scheduling snooze alarm", e)
+            Log.e("ReminderScheduler", "Error scheduling snooze alarm clock, falling back", e)
+            try {
+                alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, snoozeTime, pendingIntent)
+            } catch (e2: Exception) {
+                alarmManager.set(AlarmManager.RTC_WAKEUP, snoozeTime, pendingIntent)
+            }
         }
     }
 
-    private fun scheduleMissedDoseWork(
+    fun scheduleMissedDoseWork(
         prescription: Prescription,
         slotName: String,
         hour: Int,
-        minute: Int
+        minute: Int,
+        gracePeriodMinutes: Int = 30
     ) {
         val now = Calendar.getInstance()
         val target = Calendar.getInstance().apply {
@@ -225,15 +263,20 @@ class ReminderScheduler @Inject constructor(
             target.add(Calendar.DAY_OF_YEAR, 1)
         }
 
-        val missedTargetTime = target.timeInMillis + (60 * 60 * 1000L) // +1 hour grace
+        val graceMillis = gracePeriodMinutes * 60 * 1000L
+        val missedTargetTime = target.timeInMillis + graceMillis
         val missedInitialDelay = (missedTargetTime - now.timeInMillis).coerceAtLeast(0L)
+
+        val scheduledDoseId = "dose_${prescription.id}_${slotName.lowercase(Locale.ROOT)}_${target.timeInMillis}"
 
         val missedInputData = workDataOf(
             "prescriptionId" to prescription.id,
             "medicineName" to prescription.medicineName,
             "dosage" to prescription.dosage,
             "time" to slotName,
-            "scheduledTime" to target.timeInMillis
+            "scheduledTime" to target.timeInMillis,
+            "scheduledDoseId" to scheduledDoseId,
+            "gracePeriodMinutes" to gracePeriodMinutes
         )
 
         val missedWorkName = "missed_${prescription.id}_${slotName.lowercase(Locale.ROOT)}"
@@ -251,8 +294,10 @@ class ReminderScheduler @Inject constructor(
 
     fun cancelAlarmSlot(prescriptionId: Long, slotName: String) {
         val requestCode = getRequestCode(prescriptionId, slotName)
+        val dataStr = getReminderDataString(prescriptionId, slotName, isSnooze = false)
         val intent = Intent(context, ReminderAlarmReceiver::class.java).apply {
             action = ACTION_MEDICATION_REMINDER
+            data = Uri.parse(dataStr)
         }
         val pendingIntent = PendingIntent.getBroadcast(
             context,
@@ -266,11 +311,16 @@ class ReminderScheduler @Inject constructor(
         }
 
         // Cancel snooze pending intent if active
-        val snoozeRequestCode = requestCode + 500000
+        val snoozeRequestCode = getSnoozeRequestCode(prescriptionId, slotName)
+        val snoozeDataStr = getReminderDataString(prescriptionId, slotName, isSnooze = true)
+        val snoozeIntent = Intent(context, ReminderAlarmReceiver::class.java).apply {
+            action = ACTION_MEDICATION_REMINDER
+            data = Uri.parse(snoozeDataStr)
+        }
         val snoozePendingIntent = PendingIntent.getBroadcast(
             context,
             snoozeRequestCode,
-            intent,
+            snoozeIntent,
             PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE
         )
         if (snoozePendingIntent != null) {

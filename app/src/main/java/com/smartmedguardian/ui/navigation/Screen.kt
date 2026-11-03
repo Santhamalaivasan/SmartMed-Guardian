@@ -32,6 +32,7 @@ sealed class Screen(val route: String) {
     object Schedule : Screen("schedule")
     object BarcodeScanner : Screen("barcode_scanner")
     object Analytics : Screen("analytics")
+    object ConditionTrend : Screen("condition_trend")
     object Caregiver : Screen("caregiver")
     object CaregiverDashboard : Screen("caregiver_dashboard/{patientId}")
     object Settings : Screen("settings")

@@ -39,6 +39,10 @@ class PreferenceManager @Inject constructor(@ApplicationContext context: Context
         preferences[BIOMETRIC_ENABLED] ?: false
     }
 
+    val missedDoseGracePeriodMinutes: Flow<Int> = dataStore.data.map { preferences ->
+        preferences[MISSED_DOSE_GRACE_PERIOD_MINUTES] ?: 30
+    }
+
     suspend fun setVoiceEnabled(enabled: Boolean) {
         dataStore.edit { preferences ->
             preferences[VOICE_ENABLED] = enabled
@@ -75,6 +79,12 @@ class PreferenceManager @Inject constructor(@ApplicationContext context: Context
         }
     }
 
+    suspend fun setMissedDoseGracePeriodMinutes(minutes: Int) {
+        dataStore.edit { preferences ->
+            preferences[MISSED_DOSE_GRACE_PERIOD_MINUTES] = minutes
+        }
+    }
+
     companion object {
         private val VOICE_ENABLED = booleanPreferencesKey("voice_enabled")
         private val NOTIFICATIONS_ENABLED = booleanPreferencesKey("notifications_enabled")
@@ -82,5 +92,6 @@ class PreferenceManager @Inject constructor(@ApplicationContext context: Context
         private val SNOOZE_DURATION = intPreferencesKey("snooze_duration")
         private val CAREGIVER_ENABLED = booleanPreferencesKey("caregiver_enabled")
         private val BIOMETRIC_ENABLED = booleanPreferencesKey("biometric_enabled")
+        private val MISSED_DOSE_GRACE_PERIOD_MINUTES = intPreferencesKey("missed_dose_grace_period_minutes")
     }
 }

@@ -7,9 +7,9 @@ import androidx.room.PrimaryKey
 data class Prescription(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0,
-    val medicineName: String,
-    val dosage: String,
-    val frequency: String,
+    val medicineName: String = "",
+    val dosage: String = "",
+    val frequency: String = "",
     val instructions: String = "",
     val morning: Boolean = false,
     val afternoon: Boolean = false,
@@ -22,8 +22,8 @@ data class Prescription(
     val remindersEnabled: Boolean = true,
     val beforeFood: Boolean = false,
     val afterFood: Boolean = false,
-    val startDate: Long,
-    val endDate: Long,
+    val startDate: Long = 0L,
+    val endDate: Long = 0L,
     val createdAt: Long = System.currentTimeMillis(),
     val notes: String = ""
 )

@@ -9,6 +9,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
 import com.smartmedguardian.ui.screens.analytics.AnalyticsScreen
+import com.smartmedguardian.ui.screens.analytics.ConditionTrendScreen
 import com.smartmedguardian.ui.screens.auth.LoginScreen
 import com.smartmedguardian.ui.screens.auth.SignUpScreen
 import com.smartmedguardian.ui.screens.camera.BarcodeScannerScreen
@@ -261,7 +262,13 @@ fun NavGraph(
             )
         }
         composable(Screen.Analytics.route) {
-            AnalyticsScreen(onBackClick = { navController.popBackStack() })
+            AnalyticsScreen(
+                onBackClick = { navController.popBackStack() },
+                onNavigateToConditionTrend = { navController.navigate(Screen.ConditionTrend.route) }
+            )
+        }
+        composable(Screen.ConditionTrend.route) {
+            ConditionTrendScreen(onBackClick = { navController.popBackStack() })
         }
         composable(Screen.Caregiver.route) {
             CaregiverScreen(

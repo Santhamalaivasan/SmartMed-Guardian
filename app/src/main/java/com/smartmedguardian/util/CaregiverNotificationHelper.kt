@@ -17,8 +17,8 @@ import java.util.Calendar
 
 object CaregiverNotificationHelper {
 
-    const val CHANNEL_ID = "caregiver_notifications_channel"
-    const val CHANNEL_NAME = "Caregiver Medication Alerts"
+    const val CHANNEL_ID = NotificationConstants.CAREGIVER_ALERTS_CHANNEL_ID
+    const val CHANNEL_NAME = NotificationConstants.CAREGIVER_ALERTS_CHANNEL_NAME
 
     fun createNotificationChannel(context: Context) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -102,8 +102,13 @@ object CaregiverNotificationHelper {
             .build()
 
         val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (!notificationManager.areNotificationsEnabled()) {
+            Log.w("CaregiverNotification", "Notification permission disabled. Local notification skipped.")
+            return
+        }
+
         val notificationId = (System.currentTimeMillis() % 100000).toInt()
         notificationManager.notify(notificationId, notification)
-        Log.d("CaregiverNotification", "Posted local caregiver notification: $title - $body")
+        Log.d("CaregiverNotification", "Posted local caregiver notification: $title - [REDACTED_BODY]")
     }
 }

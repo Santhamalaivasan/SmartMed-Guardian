@@ -25,47 +25,59 @@ class MissedDoseWorker @AssistedInject constructor(
 ) : CoroutineWorker(context, workerParams) {
 
     override suspend fun doWork(): Result {
+        val prescriptionId = inputData.getLong("prescriptionId", 0L)
         val medicineName = inputData.getString("medicineName") ?: return Result.failure()
         val dosage = inputData.getString("dosage") ?: ""
         val timeSlot = inputData.getString("time") ?: ""
         val scheduledTime = inputData.getLong("scheduledTime", 0L)
+        val inputDoseId = inputData.getString("scheduledDoseId")
 
-        val targetScheduledTime = if (scheduledTime > 0L) scheduledTime else System.currentTimeMillis() - 3600000L
+        val targetScheduledTime = if (scheduledTime > 0L) scheduledTime else System.currentTimeMillis() - 1800000L
+        val doseId = inputDoseId ?: "dose_${prescriptionId}_${timeSlot.lowercase()}_$targetScheduledTime"
 
-        // Window: +- 2 hours around targetScheduledTime
-        val windowStart = targetScheduledTime - (2 * 3600000L)
-        val windowEnd = targetScheduledTime + (2 * 3600000L)
-
-        // Check existing adherence records for this medicine in this time window
-        val existingRecords = repository.getAdherenceForMedicineInWindow(medicineName, windowStart, windowEnd)
-
-        // If any record exists for this dose (TAKEN, SKIPPED, SKIP, LATE, or already MISSED), do nothing
-        val isHandled = existingRecords.any { 
-            it.status == "TAKEN" || it.status == "SKIPPED" || it.status == "SKIP" || it.status == "MISSED" || it.status == "LATE"
+        // 1. Atomic Check 1: Query existing AdherenceRecord by stable scheduledDoseId
+        val recordByDoseId = repository.getRecordByDoseId(doseId)
+        if (recordByDoseId != null) {
+            val status = recordByDoseId.status
+            if (status == "TAKEN" || status == "ON_TIME" || status == "LATE" || status == "SKIPPED" || status == "SKIP") {
+                Log.d("MissedDoseWorker", "Dose $doseId already handled with status=$status. Skipping missed dose check.")
+                return Result.success()
+            }
+            if (status == "MISSED" && recordByDoseId.caregiverNotified) {
+                Log.d("MissedDoseWorker", "Duplicate missed dose check blocked for $doseId (Caregiver already notified).")
+                return Result.success()
+            }
         }
 
-        if (!isHandled) {
-            val missedRecord = AdherenceRecord(
+        // 2. Atomic Check 2: Check window for canonical name matches
+        val windowStart = targetScheduledTime - (2 * 3600000L)
+        val windowEnd = targetScheduledTime + (2 * 3600000L)
+        val canonicalTarget = com.smartmedguardian.util.MedicineNameCanonicalizer.canonicalize(medicineName)
+        val namesToCheck = listOf(medicineName, canonicalTarget)
+        
+        val existingRecords = repository.getAdherenceForCanonicalNamesInWindow(namesToCheck, windowStart, windowEnd)
+        val isHandledInWindow = existingRecords.any { 
+            it.status == "TAKEN" || it.status == "ON_TIME" || it.status == "LATE" || it.status == "SKIPPED" || it.status == "SKIP"
+        }
+
+        if (isHandledInWindow) {
+            Log.d("MissedDoseWorker", "Dose $medicineName ($timeSlot) taken/skipped in window. Skipping missed dose check.")
+            return Result.success()
+        }
+
+        // 3. Mark dose as MISSED in MedicineRepository (atomic persistence and caregiver alert dispatch)
+        try {
+            repository.markDoseMissed(
+                scheduledDoseId = doseId,
                 medicineName = medicineName,
                 scheduledTime = targetScheduledTime,
-                actualTime = null,
-                status = "MISSED"
+                dosage = dosage,
+                slotName = timeSlot
             )
-            repository.insertAdherenceRecord(missedRecord)
-            
-            // Create Caregiver Alert for missed dose
-            try {
-                repository.createCaregiverAlert(
-                    eventType = "MISSED_DOSE",
-                    medicineName = medicineName,
-                    message = "Missed $timeSlot dose (${dosage.ifBlank { "as prescribed" }})",
-                    scheduledTime = targetScheduledTime
-                )
-            } catch (e: Exception) {
-                Log.e("SMARTMED_CAREGIVER", "Failed to create caregiver alert for missed dose: ${e.message}", e)
-            }
-
             showMissedDoseNotification(medicineName, dosage, timeSlot)
+        } catch (e: Exception) {
+            Log.e("MissedDoseWorker", "Error processing missed dose $doseId: ${e.message}", e)
+            return Result.retry()
         }
 
         return Result.success()
@@ -74,14 +86,19 @@ class MissedDoseWorker @AssistedInject constructor(
     private fun showMissedDoseNotification(medicineName: String, dosage: String, timeSlot: String) {
         val context = applicationContext
         val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        val channelId = "medicine_reminder_channel"
+        val channelId = com.smartmedguardian.util.NotificationConstants.MEDICATION_REMINDERS_CHANNEL_ID
 
         val channel = NotificationChannel(
             channelId,
-            "Medicine Reminders",
+            com.smartmedguardian.util.NotificationConstants.MEDICATION_REMINDERS_CHANNEL_NAME,
             NotificationManager.IMPORTANCE_HIGH
         )
         notificationManager.createNotificationChannel(channel)
+
+        if (!notificationManager.areNotificationsEnabled()) {
+            Log.w("MissedDoseWorker", "Notification permission disabled. Notification skipped.")
+            return
+        }
 
         val intent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
@@ -90,7 +107,7 @@ class MissedDoseWorker @AssistedInject constructor(
 
         val notification = NotificationCompat.Builder(context, channelId)
             .setContentTitle("Missed Dose Alert: $medicineName")
-            .setContentText("You missed your $timeSlot dose ($dosage).")
+            .setContentText("The scheduled $timeSlot dose of $medicineName ($dosage) was missed.")
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setContentIntent(pendingIntent)

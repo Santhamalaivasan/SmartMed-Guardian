@@ -14,11 +14,13 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
+import com.smartmedguardian.repository.MedicineRepository
 import javax.inject.Inject
 
 @HiltViewModel
 class AuthViewModel @Inject constructor(
-    private val preferenceManager: PreferenceManager
+    private val preferenceManager: PreferenceManager,
+    private val repository: MedicineRepository
 ) : ViewModel() {
 
     private val auth: FirebaseAuth? by lazy {
@@ -75,9 +77,16 @@ class AuthViewModel @Inject constructor(
     }
 
     fun logout() {
-        auth?.signOut()
-        _currentUser.value = null
-        _authState.value = AuthState.Idle
+        viewModelScope.launch {
+            try {
+                repository.clearLocalUserData()
+                auth?.signOut()
+                _currentUser.value = null
+                _authState.value = AuthState.Idle
+            } catch (e: Exception) {
+                _authState.value = AuthState.Error("Logout cleanup failed: ${e.message ?: "Unknown error"}")
+            }
+        }
     }
 
     fun resetPassword(email: String) {

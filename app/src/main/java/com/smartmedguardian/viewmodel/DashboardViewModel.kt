@@ -34,7 +34,11 @@ class DashboardViewModel @Inject constructor(
     val riskAssessment: StateFlow<RiskAssessment> = combine(adherenceRecords, prescriptions) { records, prescs ->
         val risk = riskEngine.assessRisk(records, prescs)
         viewModelScope.launch {
-            repository.uploadRisk(risk)
+            try {
+                repository.uploadRisk(risk)
+            } catch (e: Exception) {
+                // Background upload error handling
+            }
         }
         risk
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), RiskAssessment(RiskLevel.LOW, 0, emptyList()))

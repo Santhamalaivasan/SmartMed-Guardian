@@ -697,7 +697,7 @@ fun AddMedicineDialog(
                 NeumorphicTextField(
                     value = dosage,
                     onValueChange = { dosage = it },
-                    placeholder = "Dosage (e.g. 1 Tablet)"
+                    placeholder = "Dosage in mg"
                 )
 
                 // STEP 2 & 3: When do you take this medicine?

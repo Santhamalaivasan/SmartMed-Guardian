@@ -175,13 +175,14 @@ fun DetectionResultScreen(
                                     VerificationStatus.CORRECT_MEDICINE -> MaterialTheme.colorScheme.primary
                                     VerificationStatus.MEDICINE_NOT_FOUND -> MaterialTheme.colorScheme.error
                                     VerificationStatus.UNSCHEDULED_TIME -> Warning
-                                    VerificationStatus.ALREADY_VERIFIED -> Warning
+                                    VerificationStatus.ALREADY_VERIFIED, VerificationStatus.DUPLICATE_INGREDIENT -> Warning
                                     VerificationStatus.UNABLE_TO_VERIFY, VerificationStatus.UNKNOWN_MEDICINE -> Warning
                                 }
 
                                 val statusTitle = when (result.status) {
                                     VerificationStatus.CORRECT_MEDICINE -> "✅ Medicine Verified Successfully"
                                     VerificationStatus.ALREADY_VERIFIED -> "⚠️ Dose Already Verified"
+                                    VerificationStatus.DUPLICATE_INGREDIENT -> "⚠️ Duplicate Active Ingredient Warning"
                                     VerificationStatus.MEDICINE_NOT_FOUND -> "⚠️ Medicine Does Not Match Prescription"
                                     VerificationStatus.UNSCHEDULED_TIME -> "⚠️ Not Scheduled Now"
                                     VerificationStatus.UNABLE_TO_VERIFY -> "⚠️ Unable to Verify Medicine"

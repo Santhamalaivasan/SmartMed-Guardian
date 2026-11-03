@@ -20,4 +20,7 @@ interface PrescriptionDao {
 
     @Query("SELECT * FROM prescriptions WHERE medicineName = :name LIMIT 1")
     suspend fun getPrescriptionByName(name: String): Prescription?
+
+    @Query("DELETE FROM prescriptions")
+    suspend fun deleteAllPrescriptions()
 }

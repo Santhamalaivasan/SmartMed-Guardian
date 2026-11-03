@@ -111,7 +111,7 @@ class MedicineReferenceMatcher {
         try {
             Log.d("MedicineReferenceMatcher", "=== MATCH RESULT ===")
             Log.d("MedicineReferenceMatcher", "Best similarity: $bestSimilarity")
-            Log.d("MedicineReferenceMatcher", "Matched Prescription: ${bestPrescription?.medicineName} (ID: ${bestPrescription?.id})")
+            Log.d("MedicineReferenceMatcher", "Matched Prescription: ${if (bestPrescription != null) "[REDACTED_MEDICINE]" else "NONE"} (ID: ${bestPrescription?.id})")
             Log.d("MedicineReferenceMatcher", "=====================")
         } catch (ignored: Throwable) {}
 

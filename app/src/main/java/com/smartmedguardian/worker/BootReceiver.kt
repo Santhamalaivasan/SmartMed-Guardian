@@ -22,8 +22,13 @@ class BootReceiver : BroadcastReceiver() {
     lateinit var reminderScheduler: ReminderScheduler
 
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action == Intent.ACTION_BOOT_COMPLETED) {
-            Log.d("BootReceiver", "Device boot completed. Restoring active medication reminders...")
+        val action = intent.action ?: return
+        if (action == Intent.ACTION_BOOT_COMPLETED ||
+            action == Intent.ACTION_MY_PACKAGE_REPLACED ||
+            action == Intent.ACTION_TIME_CHANGED ||
+            action == Intent.ACTION_TIMEZONE_CHANGED) {
+
+            Log.d("BootReceiver", "System event ($action) received. Recalculating and restoring medication reminders...")
             val pendingResult = goAsync()
             CoroutineScope(Dispatchers.IO).launch {
                 try {
@@ -33,9 +38,9 @@ class BootReceiver : BroadcastReceiver() {
                             reminderScheduler.scheduleReminders(prescription)
                         }
                     }
-                    Log.d("BootReceiver", "Restored reminders for ${prescriptions.size} prescriptions")
+                    Log.d("BootReceiver", "Successfully rescheduled reminders for ${prescriptions.size} active prescriptions on $action")
                 } catch (e: Exception) {
-                    Log.e("BootReceiver", "Error restoring reminders on boot", e)
+                    Log.e("BootReceiver", "Error rescheduling reminders on $action", e)
                 } finally {
                     pendingResult.finish()
                 }

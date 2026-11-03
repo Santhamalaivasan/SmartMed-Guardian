@@ -9,9 +9,9 @@ data class MedicineHistory(
     val id: Long = 0,
     val userId: String? = null,
     val prescriptionId: Long? = null,
-    val detectedMedicineName: String,
-    val confidence: Float,
-    val timestamp: Long,
-    val verificationStatus: String, // "CORRECT_MEDICINE", "MEDICINE_NOT_FOUND", "UNABLE_TO_VERIFY"
+    val detectedMedicineName: String = "",
+    val confidence: Float = 0f,
+    val timestamp: Long = System.currentTimeMillis(),
+    val verificationStatus: String = "", // "CORRECT_MEDICINE", "MEDICINE_NOT_FOUND", "UNABLE_TO_VERIFY"
     val imagePath: String? = null
 )

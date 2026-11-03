@@ -1,40 +1,84 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Helper function to check if user is authenticated
+
+    // Helper functions for caregiver validation
     function isAuthenticated() {
       return request.auth != null;
     }
 
-    // Helper function to check if user is accessing their own data
     function isOwner(userId) {
-      return request.auth.uid == userId;
+      return isAuthenticated() && request.auth.uid == userId;
     }
 
+    function isAlertPatient(data) {
+      return isAuthenticated() && request.auth.uid == data.patientId;
+    }
+
+    function isAlertCaregiver(data) {
+      return isAuthenticated() && (
+        request.auth.uid == data.caregiverId ||
+        exists(/databases/$(database)/documents/users/$(data.patientId)/caregivers/$(request.auth.uid))
+      );
+    }
+
+    function validAlertFields(data) {
+      return data.patientId is string && data.patientId.size() > 0 &&
+             data.caregiverId is string &&
+             data.alertId is string &&
+             data.medicineName is string &&
+             data.eventType is string &&
+             data.message is string &&
+             data.status is string &&
+             (data.createdAt is number || data.createdAt is timestamp) &&
+             (data.scheduledTime is number || data.scheduledTime is timestamp) &&
+             data.acknowledged is bool;
+    }
+
+    // User data is strictly isolated to the authenticated owner with caregiver alert exceptions
     match /users/{userId} {
-      // Users can read/write their own profile
-      allow read, write: if isAuthenticated() && isOwner(userId);
+      allow read, write: if isOwner(userId);
 
-      // Sub-collections: prescriptions, history, adherence, allergies, caregiver
-      match /prescriptions/{docId} {
-        allow read, write: if isAuthenticated() && isOwner(userId);
+      // Only patient (owner) can manage caregiver authorization documents
+      match /caregivers/{caregiverUid} {
+        allow read, write: if isOwner(userId);
       }
-      match /history/{docId} {
-        allow read, write: if isAuthenticated() && isOwner(userId);
-      }
-      match /adherence/{docId} {
-        allow read, write: if isAuthenticated() && isOwner(userId);
-      }
-      match /allergies/{docId} {
-        allow read, write: if isAuthenticated() && isOwner(userId);
-      }
-      match /caregiver/{docId} {
-        allow read, write: if isAuthenticated() && isOwner(userId);
 
-        // Allow caregivers to read patient data if linked
-        // This is a simplified rule; in production, you'd check a 'linked_caregiver' field
-        // or a separate 'relationships' collection.
+      match /caregiver_alerts/{alertId} {
+        allow read, update: if isAuthenticated() && (
+          isOwner(userId) ||
+          request.auth.uid == resource.data.caregiverId ||
+          exists(/databases/$(database)/documents/users/$(userId)/caregivers/$(request.auth.uid))
+        );
       }
+
+      match /{allSubcollections=**} {
+        allow read, write: if isOwner(userId);
+      }
+    }
+
+    // Top-level Caregiver Alerts: Strictly authorized access between patient & assigned caregiver
+    match /caregiver_alerts/{alertId} {
+      // Patient creates alert for themselves; data schema validated
+      allow create: if isAuthenticated() &&
+                       request.resource.data.patientId == request.auth.uid &&
+                       validAlertFields(request.resource.data);
+
+      // Patient or assigned caregiver can read alert
+      allow read: if isAuthenticated() &&
+                     (isAlertPatient(resource.data) || isAlertCaregiver(resource.data));
+
+      // Patient or assigned caregiver can update; ownership fields are immutable
+      allow update: if isAuthenticated() &&
+                       (isAlertPatient(resource.data) || isAlertCaregiver(resource.data)) &&
+                       request.resource.data.patientId == resource.data.patientId &&
+                       request.resource.data.caregiverId == resource.data.caregiverId &&
+                       request.resource.data.alertId == resource.data.alertId &&
+                       request.resource.data.status is string &&
+                       request.resource.data.acknowledged is bool;
+
+      // Only patient can delete alert
+      allow delete: if isAuthenticated() && isAlertPatient(resource.data);
     }
   }
 }

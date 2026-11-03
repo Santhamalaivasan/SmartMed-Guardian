@@ -46,6 +46,7 @@ fun VerificationScreen(
                 val info = when (result.status) {
                     VerificationStatus.CORRECT_MEDICINE -> VerificationInfo(Icons.Default.CheckCircle, "Medicine Verified Successfully", MaterialTheme.colorScheme.primary, result.message ?: "The detected medicine matches an active prescription. Dose marked as taken.")
                     VerificationStatus.ALREADY_VERIFIED -> VerificationInfo(Icons.Default.Info, "Dose Already Verified", Warning, result.message ?: "This dose has already been verified today. Dose was not marked as taken again.")
+                    VerificationStatus.DUPLICATE_INGREDIENT -> VerificationInfo(Icons.Default.Warning, "Duplicate Active Ingredient Warning", Warning, result.message ?: "Another medicine with the same active ingredient was recently recorded.")
                     VerificationStatus.UNSCHEDULED_TIME -> VerificationInfo(Icons.Default.Schedule, "Not Scheduled Now", Warning, result.message ?: "This medicine is in your prescription, but is not scheduled for this time slot. Dose was not marked as taken.")
                     VerificationStatus.MEDICINE_NOT_FOUND -> VerificationInfo(Icons.Default.Error, "Medicine Does Not Match", MaterialTheme.colorScheme.error, result.message ?: "This medicine does not match your active prescriptions. Dose was not marked as taken.")
                     VerificationStatus.UNABLE_TO_VERIFY, VerificationStatus.UNKNOWN_MEDICINE -> VerificationInfo(Icons.Default.Warning, "Unverified Medicine", MaterialTheme.colorScheme.secondary, result.message ?: "Identification confidence or OCR cross-verification is unverified. Dose was not marked as taken.")
@@ -79,10 +80,8 @@ fun VerificationScreen(
                 NeumorphicCard(modifier = Modifier.fillMaxWidth()) {
                     val detectedDisplayName = if (result.status == VerificationStatus.UNABLE_TO_VERIFY || result.status == VerificationStatus.UNKNOWN_MEDICINE) {
                         "Unable to Verify Medicine"
-                    } else if (result.recognitionResult.name.equals("Dolo650", ignoreCase = true) || result.recognitionResult.name.equals("Dolo-650", ignoreCase = true)) {
-                        "Dolo-650"
                     } else {
-                        result.recognitionResult.name
+                        com.smartmedguardian.util.MedicineNameCanonicalizer.canonicalize(result.recognitionResult.name)
                     }
                     Text(
                         text = "Detected: $detectedDisplayName",

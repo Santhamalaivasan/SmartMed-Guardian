@@ -61,13 +61,39 @@ class SafetyViewModel @Inject constructor(
 
     private suspend fun checkDuplicateDose(info: MedicineInfo) {
         val history = repository.getAllHistory().first()
-        val lastTaken = history.filter { it.detectedMedicineName == info.medicineName && it.verificationStatus == "MATCH" }
-            .firstOrNull()
+        val canonicalTarget = com.smartmedguardian.util.MedicineNameCanonicalizer.canonicalize(info.medicineName)
+        val validStatuses = listOf("CORRECT_MEDICINE", "MATCH")
+        
+        val lastTaken = history.firstOrNull { item ->
+            val itemCanonical = com.smartmedguardian.util.MedicineNameCanonicalizer.canonicalize(item.detectedMedicineName)
+            val isNameMatch = com.smartmedguardian.util.MedicineNameCanonicalizer.isSameMedicine(itemCanonical, canonicalTarget)
+            isNameMatch && validStatuses.contains(item.verificationStatus)
+        }
             
         lastTaken?.let {
             val diff = System.currentTimeMillis() - it.timestamp
             if (diff < 4 * 60 * 60 * 1000) { // 4 hours threshold
-                _duplicateDoseAlert.value = "This medicine was already verified ${diff / (60 * 1000)} minutes ago."
+                _duplicateDoseAlert.value = "Duplicate Dose Warning: This medicine was already verified ${diff / (60 * 1000)} minutes ago."
+            } else {
+                _duplicateDoseAlert.value = null
+            }
+        } ?: run {
+            val activeIngredient = info.genericName.split("(").first().trim()
+            if (activeIngredient.isNotBlank()) {
+                val duplicateIngredientTaken = history.firstOrNull { item ->
+                    if (!validStatuses.contains(item.verificationStatus)) return@firstOrNull false
+                    val itemInfo = repository.getMedicineInfo(item.detectedMedicineName)
+                    itemInfo != null && itemInfo.medicineName != info.medicineName &&
+                            itemInfo.genericName.contains(activeIngredient, ignoreCase = true) &&
+                            (System.currentTimeMillis() - item.timestamp) < 4 * 60 * 60 * 1000
+                }
+                if (duplicateIngredientTaken != null) {
+                    _duplicateDoseAlert.value = "Duplicate Active Ingredient Warning: Another medication containing $activeIngredient (${duplicateIngredientTaken.detectedMedicineName}) was recently verified."
+                } else {
+                    _duplicateDoseAlert.value = null
+                }
+            } else {
+                _duplicateDoseAlert.value = null
             }
         }
     }

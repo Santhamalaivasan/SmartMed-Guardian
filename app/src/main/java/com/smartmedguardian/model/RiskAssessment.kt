@@ -5,9 +5,9 @@ import androidx.compose.ui.graphics.Color
 import com.smartmedguardian.ui.theme.*
 
 data class RiskAssessment(
-    val level: RiskLevel,
-    val score: Int,
-    val reasons: List<String>
+    val level: RiskLevel = RiskLevel.LOW,
+    val score: Int = 0,
+    val reasons: List<String> = emptyList()
 )
 
 enum class RiskLevel(val label: String, val color: Color) {
@@ -25,4 +25,3 @@ val RiskLevel.themeColor: Color
         RiskLevel.HIGH -> Error
         RiskLevel.VERY_HIGH -> Error
     }
-

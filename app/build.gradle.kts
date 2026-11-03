@@ -43,6 +43,11 @@ android {
     androidResources {
         noCompress += "tflite"
     }
+    packaging {
+        jniLibs {
+            useLegacyPackaging = false
+        }
+    }
 }
 
 dependencies {

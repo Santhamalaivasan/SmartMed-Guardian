@@ -20,4 +20,10 @@ interface CaregiverAlertDao {
 
     @Query("SELECT * FROM caregiver_alerts WHERE patientId = :patientId ORDER BY createdAt DESC")
     fun getAlertsForPatient(patientId: String): Flow<List<CaregiverAlert>>
+
+    @Query("SELECT * FROM caregiver_alerts WHERE patientId = :patientId AND medicineName = :medicineName AND scheduledTime = :scheduledTime AND eventType = 'MISSED_DOSE' LIMIT 1")
+    suspend fun getMissedAlertForDose(patientId: String, medicineName: String, scheduledTime: Long): CaregiverAlert?
+
+    @Query("DELETE FROM caregiver_alerts")
+    suspend fun deleteAllCaregiverAlerts()
 }

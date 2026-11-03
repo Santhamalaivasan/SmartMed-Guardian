@@ -7,10 +7,10 @@ import androidx.room.PrimaryKey
 data class CaregiverInfo(
     @PrimaryKey
     val id: Int = 1, // Single caregiver for now
-    val encryptedName: String,
-    val encryptedRelationship: String,
-    val encryptedPhoneNumber: String,
-    val encryptedEmail: String,
+    val encryptedName: String = "",
+    val encryptedRelationship: String = "",
+    val encryptedPhoneNumber: String = "",
+    val encryptedEmail: String = "",
     val isEscalationEnabled: Boolean = true,
     val caregiverFcmToken: String? = null
 )

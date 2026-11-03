@@ -12,6 +12,9 @@ interface MedicineHistoryDao {
     @Query("SELECT * FROM medicine_history ORDER BY timestamp DESC")
     fun getAllHistory(): Flow<List<MedicineHistory>>
 
+    @Query("SELECT * FROM medicine_history WHERE verificationStatus IN (:statuses) ORDER BY timestamp DESC")
+    suspend fun getRecentHistoryByStatus(statuses: List<String>): List<MedicineHistory>
+
     @Query("DELETE FROM medicine_history")
     suspend fun clearHistory()
 }

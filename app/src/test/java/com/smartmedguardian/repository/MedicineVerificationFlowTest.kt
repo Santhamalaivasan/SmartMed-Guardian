@@ -10,6 +10,7 @@ import com.smartmedguardian.ml.ReferenceMatchResult
 import com.smartmedguardian.model.VerificationResult
 import com.smartmedguardian.model.VerificationStatus
 import com.smartmedguardian.util.CaregiverNotificationHelper
+import com.smartmedguardian.util.MedicineNameCanonicalizer
 import com.smartmedguardian.util.MedicineVerificationManager
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -85,10 +86,12 @@ class MedicineVerificationFlowTest {
         // Duplicate check
         val alreadyVerified = if (candidatePrescription != null) {
             val (wStart, wEnd) = manager.getSlotTimeWindowMillis(activeSlot, currentTime, currentDate)
-            fakeAdherenceList.any {
-                it.medicineName.equals(candidatePrescription.medicineName, ignoreCase = true) &&
-                        (it.status == "TAKEN" || it.status == "ON_TIME" || it.status == "LATE") &&
-                        it.scheduledTime in wStart..wEnd
+            val canonicalTarget = MedicineNameCanonicalizer.canonicalize(candidatePrescription.medicineName)
+            fakeAdherenceList.any { rec ->
+                val recCanonical = MedicineNameCanonicalizer.canonicalize(rec.medicineName)
+                MedicineNameCanonicalizer.isSameMedicine(recCanonical, canonicalTarget) &&
+                        (rec.status == "TAKEN" || rec.status == "ON_TIME" || rec.status == "LATE") &&
+                        rec.scheduledTime in wStart..wEnd
             }
         } else false
 
@@ -105,9 +108,54 @@ class MedicineVerificationFlowTest {
             alreadyVerified = alreadyVerified
         )
 
-        var adherenceCreated = false
-        if (verification.status == VerificationStatus.CORRECT_MEDICINE && verification.prescription != null) {
+        // Post-verification canonical duplicate and ingredient checks
+        val finalVerification = if (verification.status == VerificationStatus.CORRECT_MEDICINE && verification.prescription != null) {
             val verifiedPrescription = verification.prescription
+            val (wStart, wEnd) = manager.getSlotTimeWindowMillis(activeSlot, currentTime, currentDate)
+            val canonicalTarget = MedicineNameCanonicalizer.canonicalize(verifiedPrescription.medicineName)
+
+            val isDuplicate = fakeAdherenceList.any { rec ->
+                val recCanonical = MedicineNameCanonicalizer.canonicalize(rec.medicineName)
+                MedicineNameCanonicalizer.isSameMedicine(recCanonical, canonicalTarget) &&
+                        (rec.status == "TAKEN" || rec.status == "ON_TIME" || rec.status == "LATE") &&
+                        rec.scheduledTime in wStart..wEnd
+            }
+
+            if (isDuplicate) {
+                verification.copy(
+                    status = VerificationStatus.ALREADY_VERIFIED,
+                    message = "⚠️ Dose Already Verified\nThe $activeSlot dose of ${verifiedPrescription.medicineName} has already been verified for today.\nDose was not marked as taken again."
+                )
+            } else {
+                val paracetamolBrands = setOf("Dolo-650", "Adol", "Paramol", "Panadol")
+                val isParacetamol = paracetamolBrands.any { MedicineNameCanonicalizer.isSameMedicine(it, verifiedPrescription.medicineName) }
+
+                val duplicateIngredientRec = if (isParacetamol) {
+                    fakeAdherenceList.find { rec ->
+                        val recCanonical = MedicineNameCanonicalizer.canonicalize(rec.medicineName)
+                        !MedicineNameCanonicalizer.isSameMedicine(recCanonical, canonicalTarget) &&
+                                paracetamolBrands.any { MedicineNameCanonicalizer.isSameMedicine(it, recCanonical) } &&
+                                (rec.status == "TAKEN" || rec.status == "ON_TIME" || rec.status == "LATE") &&
+                                rec.scheduledTime in wStart..wEnd
+                    }
+                } else null
+
+                if (duplicateIngredientRec != null) {
+                    verification.copy(
+                        status = VerificationStatus.DUPLICATE_INGREDIENT,
+                        message = "⚠️ Duplicate Active Ingredient Warning\nAnother medication (${duplicateIngredientRec.medicineName}) containing Paracetamol has already been recorded for this dose window."
+                    )
+                } else {
+                    verification
+                }
+            }
+        } else {
+            verification
+        }
+
+        var adherenceCreated = false
+        if (finalVerification.status == VerificationStatus.CORRECT_MEDICINE && finalVerification.prescription != null) {
+            val verifiedPrescription = finalVerification.prescription
             val scheduledMillis = manager.getScheduledTimeMillis(verifiedPrescription, activeSlot, cleanTargetTime, currentTime, currentDate)
             val actualMillis = currentDate.atTime(currentTime).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
 
@@ -141,28 +189,28 @@ class MedicineVerificationFlowTest {
             fakeHistoryList.add(
                 MedicineHistory(
                     detectedMedicineName = verifiedPrescription.medicineName,
-                    confidence = verification.recognitionResult.confidence,
+                    confidence = finalVerification.recognitionResult.confidence,
                     timestamp = System.currentTimeMillis(),
                     verificationStatus = VerificationStatus.CORRECT_MEDICINE.name,
                     prescriptionId = verifiedPrescription.id
                 )
             )
         } else {
-            val historyName = verification.prescription?.medicineName
-                ?: verification.recognitionResult.name.ifBlank { "Unknown" }
+            val historyName = finalVerification.prescription?.medicineName
+                ?: finalVerification.recognitionResult.name.ifBlank { "Unknown" }
 
             fakeHistoryList.add(
                 MedicineHistory(
                     detectedMedicineName = historyName,
-                    confidence = verification.recognitionResult.confidence,
+                    confidence = finalVerification.recognitionResult.confidence,
                     timestamp = System.currentTimeMillis(),
-                    verificationStatus = verification.status.name,
-                    prescriptionId = verification.prescription?.id
+                    verificationStatus = finalVerification.status.name,
+                    prescriptionId = finalVerification.prescription?.id
                 )
             )
         }
 
-        return Pair(verification, adherenceCreated)
+        return Pair(finalVerification, adherenceCreated)
     }
 
     // 1. Correct OCR + correct prescription → Taken
@@ -1156,6 +1204,141 @@ class MedicineVerificationFlowTest {
         assertTrue(alert.acknowledged)
         assertNotNull(alert.acknowledgedAt)
         assertEquals("ACKNOWLEDGED", alert.status)
+    }
+
+    // 41. Duplicate Active Ingredient TEST: Dolo-650 taken, then Adol (both Paracetamol) scanned in same window -> DUPLICATE_INGREDIENT
+    @Test
+    fun test41_duplicateActiveIngredient_detersOverdose() {
+        val presc1 = Prescription(id = 1, medicineName = "Dolo-650", dosage = "650mg", frequency = "Morning", morning = true, morningTime = "08:00", startDate = 0L, endDate = 0L)
+        val presc2 = Prescription(id = 2, medicineName = "Adol", dosage = "500mg", frequency = "Morning", morning = true, morningTime = "08:00", startDate = 0L, endDate = 0L)
+
+        // First take Dolo-650
+        val (res1, created1) = simulateVerificationFlow(
+            recognitionResult = RecognitionResult("Dolo-650", 0.95f, 0),
+            prescriptions = listOf(presc1, presc2),
+            ocrText = "DOLO-650",
+            targetSlot = "Morning",
+            currentTime = LocalTime.of(8, 0)
+        )
+        assertEquals(VerificationStatus.CORRECT_MEDICINE, res1.status)
+        assertTrue(created1)
+
+        // Then scan Adol in same Morning slot
+        val (res2, created2) = simulateVerificationFlow(
+            recognitionResult = RecognitionResult("Adol", 0.95f, 0),
+            prescriptions = listOf(presc1, presc2),
+            ocrText = "ADOL 500",
+            targetSlot = "Morning",
+            currentTime = LocalTime.of(8, 10)
+        )
+        assertEquals(VerificationStatus.DUPLICATE_INGREDIENT, res2.status)
+        assertFalse(created2)
+        assertEquals(1, fakeAdherenceList.size)
+    }
+
+    // 42. Different medicines with different active ingredients -> No false duplicate
+    @Test
+    fun test42_differentIngredients_noFalseDuplicate() {
+        val presc1 = Prescription(id = 1, medicineName = "Dolo-650", dosage = "650mg", frequency = "Morning", morning = true, morningTime = "08:00", startDate = 0L, endDate = 0L)
+        val presc2 = Prescription(id = 2, medicineName = "Brufen", dosage = "400mg", frequency = "Morning", morning = true, morningTime = "08:00", startDate = 0L, endDate = 0L)
+
+        // Take Dolo-650
+        val (res1, created1) = simulateVerificationFlow(
+            recognitionResult = RecognitionResult("Dolo-650", 0.95f, 0),
+            prescriptions = listOf(presc1, presc2),
+            ocrText = "DOLO 650",
+            targetSlot = "Morning",
+            currentTime = LocalTime.of(8, 0)
+        )
+        assertEquals(VerificationStatus.CORRECT_MEDICINE, res1.status)
+        assertTrue(created1)
+
+        // Take Brufen (Ibuprofen) in same slot
+        val (res2, created2) = simulateVerificationFlow(
+            recognitionResult = RecognitionResult("Brufen", 0.95f, 0),
+            prescriptions = listOf(presc1, presc2),
+            ocrText = "BRUFEN 400",
+            targetSlot = "Morning",
+            currentTime = LocalTime.of(8, 5)
+        )
+        assertEquals(VerificationStatus.CORRECT_MEDICINE, res2.status)
+        assertTrue(created2)
+        assertEquals(2, fakeAdherenceList.size)
+    }
+
+    // 43. Skipped or Missed dose does not count as taken for duplicate check
+    @Test
+    fun test43_skippedDose_doesNotTriggerDuplicateWarning() {
+        val presc = Prescription(id = 1, medicineName = "Dolo-650", dosage = "650mg", frequency = "Morning", morning = true, morningTime = "08:00", startDate = 0L, endDate = 0L)
+
+        // User previously skipped morning dose
+        fakeAdherenceList.add(
+            AdherenceRecord(
+                medicineName = "Dolo-650",
+                scheduledTime = System.currentTimeMillis(),
+                actualTime = null,
+                status = "SKIPPED"
+            )
+        )
+
+        // User now scans Dolo-650
+        val (res, created) = simulateVerificationFlow(
+            recognitionResult = RecognitionResult("Dolo-650", 0.95f, 0),
+            prescriptions = listOf(presc),
+            ocrText = "DOLO 650",
+            targetSlot = "Morning",
+            currentTime = LocalTime.of(8, 0)
+        )
+
+        assertEquals(VerificationStatus.CORRECT_MEDICINE, res.status)
+        assertTrue(created)
+    }
+
+    // 44. Same medicine on different days -> No duplicate warning
+    @Test
+    fun test44_sameMedicineDifferentDay_noDuplicate() {
+        val presc = Prescription(id = 1, medicineName = "Dolo-650", dosage = "650mg", frequency = "Morning", morning = true, morningTime = "08:00", startDate = 0L, endDate = 0L)
+
+        // Take dose yesterday
+        fakeAdherenceList.add(
+            AdherenceRecord(
+                medicineName = "Dolo-650",
+                scheduledTime = System.currentTimeMillis() - 86400000L,
+                actualTime = System.currentTimeMillis() - 86400000L,
+                status = "TAKEN"
+            )
+        )
+
+        // Take dose today
+        val (res, created) = simulateVerificationFlow(
+            recognitionResult = RecognitionResult("Dolo-650", 0.95f, 0),
+            prescriptions = listOf(presc),
+            ocrText = "DOLO 650",
+            targetSlot = "Morning",
+            currentTime = LocalTime.of(8, 0),
+            currentDate = LocalDate.now()
+        )
+
+        assertEquals(VerificationStatus.CORRECT_MEDICINE, res.status)
+        assertTrue(created)
+    }
+
+    // 45. Uncertain recognition -> Do not automatically record dose
+    @Test
+    fun test45_uncertainRecognition_doesNotRecordDose() {
+        val presc = Prescription(id = 1, medicineName = "Dolo-650", dosage = "650mg", frequency = "Morning", morning = true, morningTime = "08:00", startDate = 0L, endDate = 0L)
+
+        val (res, created) = simulateVerificationFlow(
+            recognitionResult = RecognitionResult("Unknown", 0.2f, 0),
+            prescriptions = listOf(presc),
+            ocrText = "",
+            targetSlot = "Morning",
+            currentTime = LocalTime.of(8, 0)
+        )
+
+        assertEquals(VerificationStatus.UNKNOWN_MEDICINE, res.status)
+        assertFalse(created)
+        assertEquals(0, fakeAdherenceList.size)
     }
 }
 

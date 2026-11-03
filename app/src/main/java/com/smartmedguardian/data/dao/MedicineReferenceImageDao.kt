@@ -62,4 +62,7 @@ interface MedicineReferenceImageDao {
     suspend fun deleteImagesForPrescription(
         prescriptionId: Long
     )
+
+    @Query("DELETE FROM medicine_reference_images")
+    suspend fun deleteAllReferenceImages()
 }

@@ -50,14 +50,27 @@ class SmartMedGuardianApp : Application(), Configuration.Provider {
     }
 
     private fun createNotificationChannel() {
-        val channelId = "medicine_reminder_channel"
         val notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-        val channel = NotificationChannel(
-            channelId,
-            "Medicine Reminders",
+        
+        val medChannel = NotificationChannel(
+            com.smartmedguardian.util.NotificationConstants.MEDICATION_REMINDERS_CHANNEL_ID,
+            com.smartmedguardian.util.NotificationConstants.MEDICATION_REMINDERS_CHANNEL_NAME,
             NotificationManager.IMPORTANCE_HIGH
-        )
-        notificationManager.createNotificationChannel(channel)
+        ).apply {
+            description = "High priority reminders for taking prescribed medicines on time"
+            enableVibration(true)
+        }
+        notificationManager.createNotificationChannel(medChannel)
+
+        val caregiverChannel = NotificationChannel(
+            com.smartmedguardian.util.NotificationConstants.CAREGIVER_ALERTS_CHANNEL_ID,
+            com.smartmedguardian.util.NotificationConstants.CAREGIVER_ALERTS_CHANNEL_NAME,
+            NotificationManager.IMPORTANCE_HIGH
+        ).apply {
+            description = "Notifications sent to caregivers when prescribed medication is taken or missed"
+            enableVibration(true)
+        }
+        notificationManager.createNotificationChannel(caregiverChannel)
     }
 
     private fun scheduleSync() {

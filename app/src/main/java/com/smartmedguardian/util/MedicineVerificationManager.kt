@@ -58,6 +58,7 @@ class MedicineVerificationManager @Inject constructor() {
         currentTime: LocalTime = LocalTime.now(),
         currentDate: LocalDate = LocalDate.now(),
         alreadyVerified: Boolean = false,
+        duplicateIngredientName: String? = null,
         prescriptionId: Long? = null
     ): VerificationResult {
         val rawOcr = ocrText?.trim() ?: ""
@@ -68,9 +69,7 @@ class MedicineVerificationManager @Inject constructor() {
         val ocrMedicineMatch = matchSupportedMedicineFromOcr(rawOcr)
 
         fun isMatchingTargetMedicine(detectedName: String, targetName: String): Boolean {
-            val dNorm = normalizeTextForMatching(detectedName)
-            val tNorm = normalizeTextForMatching(targetName)
-            return dNorm.isNotBlank() && tNorm.isNotBlank() && (dNorm == tNorm || dNorm.contains(tNorm) || tNorm.contains(dNorm))
+            return MedicineNameCanonicalizer.isSameMedicine(detectedName, targetName)
         }
 
         fun evaluatePrescriptionStatus(
@@ -117,6 +116,16 @@ class MedicineVerificationManager @Inject constructor() {
                     recognitionResult = recognitionResult.copy(name = prescription.medicineName, confidence = confidenceScore),
                     prescription = prescription,
                     message = "⚠️ Dose Already Verified\nThe $expectedSlot dose of ${prescription.medicineName} has already been verified for today.\nDose was not marked as taken again.",
+                    verificationSource = source
+                )
+            }
+
+            if (!duplicateIngredientName.isNullOrBlank()) {
+                return VerificationResult(
+                    status = VerificationStatus.DUPLICATE_INGREDIENT,
+                    recognitionResult = recognitionResult.copy(name = prescription.medicineName, confidence = confidenceScore),
+                    prescription = prescription,
+                    message = "⚠️ Duplicate Active Ingredient Warning\nAnother medication ($duplicateIngredientName) containing the same active ingredient has already been recorded for this dose window.\nPlease consult your physician before taking this dose.",
                     verificationSource = source
                 )
             }
@@ -189,10 +198,33 @@ class MedicineVerificationManager @Inject constructor() {
                     recognitionResult = recognitionResult.copy(name = targetPrescription.medicineName),
                     prescription = targetPrescription,
                     message = "⚠️ Dose Already Verified\nThe $expectedSlot dose of ${targetPrescription.medicineName} has already been verified for today.\nDose was not marked as taken again.",
-                    verificationSource = referenceMatchResult?.let { VerificationSource.REFERENCE_IMAGE } ?: VerificationSource.CNN_CLASSIFIER
+                    verificationSource = ocrMedicineMatch?.let { VerificationSource.OCR_TEXT }
+                        ?: referenceMatchResult?.let { VerificationSource.REFERENCE_IMAGE }
+                        ?: VerificationSource.CNN_CLASSIFIER
                 )
             }
 
+            // Explicit Prescription Priority 1: OCR Text Match
+            if (ocrMedicineMatch != null) {
+                val detectedName = ocrMedicineMatch.canonicalName
+                if (isMatchingTargetMedicine(detectedName, targetPrescription.medicineName)) {
+                    return evaluatePrescriptionStatus(
+                        prescription = targetPrescription,
+                        source = VerificationSource.OCR_TEXT,
+                        confidenceScore = 0.95f
+                    )
+                } else {
+                    return VerificationResult(
+                        status = VerificationStatus.MEDICINE_NOT_FOUND,
+                        recognitionResult = recognitionResult.copy(name = detectedName, confidence = 0.95f),
+                        prescription = targetPrescription,
+                        message = "⚠️ INCORRECT MEDICINE\nDetected: $detectedName\nExpected Prescription: ${targetPrescription.medicineName}\nMedicine does not match your prescription. Dose was not marked as taken.",
+                        verificationSource = VerificationSource.OCR_TEXT
+                    )
+                }
+            }
+
+            // Explicit Prescription Priority 2: Reference Image Match
             if (referenceMatchResult != null) {
                 when (referenceMatchResult.status) {
                     MatchStatus.UNCERTAIN -> {
@@ -214,77 +246,38 @@ class MedicineVerificationManager @Inject constructor() {
                         )
                     }
                     MatchStatus.MATCH -> {
-                        // Proceed to evaluate targetPrescription status
-                    }
-                }
-            }
-
-            return evaluatePrescriptionStatus(
-                prescription = targetPrescription,
-                source = referenceMatchResult?.let { VerificationSource.REFERENCE_IMAGE } ?: VerificationSource.CNN_CLASSIFIER,
-                confidenceScore = referenceMatchResult?.similarity ?: recognitionResult.confidence
-            )
-        }
-
-        // =================================================================
-        // Priority Step 1: User Reference Photo Visual Matcher (PRIMARY METHOD)
-        // =================================================================
-        if (referenceMatchResult != null) {
-            when (referenceMatchResult.status) {
-                MatchStatus.MATCH -> {
-                    val targetPrescription = referenceMatchResult.prescription
-                    if (targetPrescription != null) {
-                        val decision = evaluatePrescriptionStatus(
+                        return evaluatePrescriptionStatus(
                             prescription = targetPrescription,
                             source = VerificationSource.REFERENCE_IMAGE,
                             confidenceScore = referenceMatchResult.similarity
                         )
-                        logDiagnostics(rawOcrText = rawOcr, normalizedOcrText = normalizedOcr, ocrMedicineMatch = "NONE", prescriptions = prescriptions, currentPeriod = resolvedSlot, finalResult = decision.status.name)
-                        return decision
                     }
                 }
-                MatchStatus.UNCERTAIN -> {
-                    val targetPrescription = referenceMatchResult.prescription
-                    val recResult = recognitionResult.copy(
-                        name = targetPrescription?.medicineName ?: "Uncertain Medicine",
-                        confidence = referenceMatchResult.similarity
-                    )
-                    val decision = VerificationResult(
-                        status = VerificationStatus.UNABLE_TO_VERIFY,
-                        recognitionResult = recResult,
+            }
+
+            // Explicit Prescription Priority 3: CNN Classifier
+            val cnnName = MedicineNameCanonicalizer.canonicalize(recognitionResult.name)
+            if (recognitionResult.isKnownEnough && recognitionResult.confidence >= 0.70f && recognitionResult.top2Margin >= 0.20f) {
+                if (isMatchingTargetMedicine(cnnName, targetPrescription.medicineName)) {
+                    return evaluatePrescriptionStatus(
                         prescription = targetPrescription,
-                        message = "⚠️ UNABLE TO VERIFY MEDICINE\nUnable to verify this medicine. Please scan again.\nCommon causes: blur, poor lighting, or unsuitable viewing angle.\nDose was not marked as taken.",
-                        verificationSource = VerificationSource.REFERENCE_IMAGE
+                        source = VerificationSource.CNN_CLASSIFIER,
+                        confidenceScore = recognitionResult.confidence
                     )
-                    logDiagnostics(rawOcrText = rawOcr, normalizedOcrText = normalizedOcr, ocrMedicineMatch = "NONE", prescriptions = prescriptions, currentPeriod = resolvedSlot, finalResult = "UNCERTAIN")
-                    return decision
-                }
-                MatchStatus.MISMATCH, MatchStatus.NO_MATCH -> {
-                    val targetPrescription = referenceMatchResult.prescription
-                    val status = if (targetPrescription != null) VerificationStatus.MEDICINE_NOT_FOUND else VerificationStatus.UNKNOWN_MEDICINE
-                    val recResult = recognitionResult.copy(
-                        name = targetPrescription?.medicineName ?: recognitionResult.name,
-                        confidence = referenceMatchResult.similarity
-                    )
-                    val decision = VerificationResult(
-                        status = status,
-                        recognitionResult = recResult,
-                        prescription = targetPrescription,
-                        message = if (targetPrescription != null) {
-                            "⚠️ MEDICINE MISMATCH\nMedicine image does not match your prescription reference for ${targetPrescription.medicineName}.\nPlease check the medicine and try again. Dose was not marked as taken."
-                        } else {
-                            "UNKNOWN MEDICINE: Unable to identify medicine from prescription reference comparison.\nDose was not marked as taken."
-                        },
-                        verificationSource = VerificationSource.REFERENCE_IMAGE
-                    )
-                    logDiagnostics(rawOcrText = rawOcr, normalizedOcrText = normalizedOcr, ocrMedicineMatch = "NONE", prescriptions = prescriptions, currentPeriod = resolvedSlot, finalResult = status.name)
-                    return decision
                 }
             }
+
+            return VerificationResult(
+                status = VerificationStatus.UNKNOWN_MEDICINE,
+                recognitionResult = recognitionResult,
+                prescription = targetPrescription,
+                message = "UNKNOWN MEDICINE: Unable to verify medicine against ${targetPrescription.medicineName}.\nDose was not marked as taken.",
+                verificationSource = VerificationSource.UNCERTAIN
+            )
         }
 
         // =================================================================
-        // Priority Step 2: OCR / Text Extraction (FALLBACK)
+        // Priority Step 1: OCR / Text Extraction (PRIMARY METHOD)
         // =================================================================
         if (ocrMedicineMatch != null) {
             val detectedMedicineName = ocrMedicineMatch.canonicalName
@@ -359,9 +352,48 @@ class MedicineVerificationManager @Inject constructor() {
         }
 
         // =================================================================
+        // Priority Step 2: User Reference Photo Visual Matcher (FALLBACK)
+        // =================================================================
+        if (referenceMatchResult != null) {
+            when (referenceMatchResult.status) {
+                MatchStatus.MATCH -> {
+                    val targetPrescription = referenceMatchResult.prescription
+                    if (targetPrescription != null) {
+                        val decision = evaluatePrescriptionStatus(
+                            prescription = targetPrescription,
+                            source = VerificationSource.REFERENCE_IMAGE,
+                            confidenceScore = referenceMatchResult.similarity
+                        )
+                        logDiagnostics(rawOcrText = rawOcr, normalizedOcrText = normalizedOcr, ocrMedicineMatch = "NONE", prescriptions = prescriptions, currentPeriod = resolvedSlot, finalResult = decision.status.name)
+                        return decision
+                    }
+                }
+                MatchStatus.UNCERTAIN -> {
+                    val targetPrescription = referenceMatchResult.prescription
+                    val recResult = recognitionResult.copy(
+                        name = targetPrescription?.medicineName ?: "Uncertain Medicine",
+                        confidence = referenceMatchResult.similarity
+                    )
+                    val decision = VerificationResult(
+                        status = VerificationStatus.UNABLE_TO_VERIFY,
+                        recognitionResult = recResult,
+                        prescription = targetPrescription,
+                        message = "⚠️ UNABLE TO VERIFY MEDICINE\nUnable to verify this medicine. Please scan again.\nCommon causes: blur, poor lighting, or unsuitable viewing angle.\nDose was not marked as taken.",
+                        verificationSource = VerificationSource.REFERENCE_IMAGE
+                    )
+                    logDiagnostics(rawOcrText = rawOcr, normalizedOcrText = normalizedOcr, ocrMedicineMatch = "NONE", prescriptions = prescriptions, currentPeriod = resolvedSlot, finalResult = "UNCERTAIN")
+                    return decision
+                }
+                MatchStatus.MISMATCH, MatchStatus.NO_MATCH -> {
+                    // In general scan mode, if reference photo comparison is MISMATCH/NO_MATCH, fall through to Priority Step 3 (CNN Classification)!
+                }
+            }
+        }
+
+        // =================================================================
         // Priority Step 3: 12-Class CNN Classifier (FALLBACK)
         // =================================================================
-        val cnnPredictedName = recognitionResult.name
+        val cnnPredictedName = MedicineNameCanonicalizer.canonicalize(recognitionResult.name)
         val cnnConfidence = recognitionResult.confidence
         val normalizedCnnName = normalizeTextForMatching(cnnPredictedName)
 
@@ -671,10 +703,10 @@ class MedicineVerificationManager @Inject constructor() {
         try {
             val prescribedNames = prescriptions.joinToString(", ") { it.medicineName }.ifEmpty { "NONE" }
             Log.d("SMARTMED_VERIFICATION", "================ SMARTMED VERIFICATION DIAGNOSTICS ================")
-            Log.d("SMARTMED_VERIFICATION", "RAW OCR TEXT         : ${if (rawOcrText.isBlank()) "<empty>" else rawOcrText}")
-            Log.d("SMARTMED_VERIFICATION", "NORMALIZED OCR TEXT  : '${if (normalizedOcrText.isBlank()) "<empty>" else normalizedOcrText}'")
-            Log.d("SMARTMED_VERIFICATION", "OCR MEDICINE MATCH   : $ocrMedicineMatch")
-            Log.d("SMARTMED_VERIFICATION", "PRESCRIPTION MEDICINE: $prescribedNames")
+            Log.d("SMARTMED_VERIFICATION", "RAW OCR TEXT         : ${if (rawOcrText.isBlank()) "<empty>" else "[REDACTED_OCR]"}")
+            Log.d("SMARTMED_VERIFICATION", "NORMALIZED OCR TEXT  : ${if (normalizedOcrText.isBlank()) "<empty>" else "[REDACTED_OCR]"}")
+            Log.d("SMARTMED_VERIFICATION", "OCR MEDICINE MATCH   : ${if (ocrMedicineMatch.isNotBlank()) "[REDACTED_MEDICINE]" else "NONE"}")
+            Log.d("SMARTMED_VERIFICATION", "PRESCRIPTION MEDICINE: ${if (prescribedNames == "NONE") "NONE" else "[REDACTED_PRESCRIPTION]"}")
             Log.d("SMARTMED_VERIFICATION", "CURRENT TIME PERIOD  : $currentPeriod")
             Log.d("SMARTMED_VERIFICATION", "FINAL RESULT         : $finalResult")
             Log.d("SMARTMED_VERIFICATION", "===================================================================")

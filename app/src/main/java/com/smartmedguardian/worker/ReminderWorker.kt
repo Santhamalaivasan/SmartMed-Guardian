@@ -31,14 +31,18 @@ class ReminderWorker(
     private fun showNotification(title: String, message: String) {
         val context = applicationContext
         val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        val channelId = "medicine_reminder_channel"
+        val channelId = com.smartmedguardian.util.NotificationConstants.MEDICATION_REMINDERS_CHANNEL_ID
 
         val channel = NotificationChannel(
             channelId,
-            "Medicine Reminders",
+            com.smartmedguardian.util.NotificationConstants.MEDICATION_REMINDERS_CHANNEL_NAME,
             NotificationManager.IMPORTANCE_HIGH
         )
         notificationManager.createNotificationChannel(channel)
+
+        if (!notificationManager.areNotificationsEnabled()) {
+            return
+        }
 
         val intent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
